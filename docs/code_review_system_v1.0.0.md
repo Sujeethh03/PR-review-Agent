@@ -416,11 +416,11 @@ The system covers roughly 60–70% of the judgments a senior engineer makes duri
 
 | Phase | Weeks | Goal | Complexity |
 |---|---|---|---|
-| Foundation | 1–2 | GitHub webhook received and logged. Repo cloning working. PostgreSQL and Docker set up. | Low |
+| Foundation | 1–2 | GitHub webhook received and logged. GitHub App JWT auth working. PR diff fetched from GitHub API. Repo cloning working. | Low |
 | RAG pipeline | 3–4 | Codebase chunked, embedded, stored in ChromaDB. Retrieval function working against real diffs. | Medium |
 | Specialist agents | 5–6 | Bug, security, and pattern agents running in parallel via LangGraph. Structured Pydantic outputs. LangSmith tracing active. | Medium–High |
-| Critic + dashboard | 7–8 | Critic agent filtering false positives. Human approval dashboard live. Full loop working end to end. | High |
-| PR writer + deployment | 9–10 | Formatted GitHub comments posting. Severity routing live. Educational layer added. Deployed to Railway and Vercel. | Medium |
+| Critic + dashboard | 7–8 | Critic agent filtering false positives. PostgreSQL introduced for findings storage. Human approval dashboard live. Full loop working end to end. | High |
+| PR writer + deployment | 9–10 | Formatted GitHub comments posting. Severity routing live. Educational layer added. Docker + Docker Compose added for deployment. Deployed to Railway and Vercel. | Medium |
 
 ### Milestones
 
