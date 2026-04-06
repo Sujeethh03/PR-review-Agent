@@ -1,0 +1,18 @@
+# environment variables — never push this
+.env
+
+# your private key — never push this
+*.pem
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# virtual environment
+venv/
+env/
+
+# docker
+*.log
