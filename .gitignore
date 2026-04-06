@@ -1,0 +1,15 @@
+# environment variables
+**/.env
+*.pem
+
+# python
+__pycache__/
+*.pyc
+.DS_Store
+
+# node
+node_modules/
+.next/
+
+# docker
+*.log
