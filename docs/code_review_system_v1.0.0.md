@@ -87,7 +87,7 @@ tags: [ai, agents, code-review, langgraph, fastapi, rag, github]
 | **Product name** | Multi-Agent Code Review System |
 | **Project code** | CR-001 |
 | **Target users** | Engineering teams using GitHub for code review |
-| **Primary language support** | Python, Java |
+| **Primary language support** | All languages (tree-sitter for 100+ languages, line-based fallback for the rest) |
 | **Deployment target** | Railway / Fly.io (backend), Vercel (dashboard) |
 | **Estimated build time** | 8–10 weeks |
 | **Trust level default** | Level 1 — read only |
@@ -105,7 +105,7 @@ This document covers the end-to-end pipeline from GitHub webhook to posted PR co
 
 - Multi-organisation / SaaS billing model
 - Dashboard user authentication and role management
-- Support for languages other than Python and Java
+- Integration with code review tools other than GitHub (beyond what is already excluded below)
 - Integration with code review tools other than GitHub
 
 ---
@@ -141,7 +141,7 @@ Instead of one model doing everything, the system runs a coordinated pipeline of
 | Time from push to findings ready | < 60 seconds |
 | False positive rate (after critic) | < 15% |
 | Finding acceptance rate (human dashboard) | > 70% |
-| Supported languages | Python, Java |
+| Supported languages | All (tree-sitter for 100+ languages, line-based fallback for the rest) |
 | Agents in the pipeline | 5 (ingestion, bug, security, pattern, critic) |
 | Trust levels | 3 |
 
@@ -266,6 +266,75 @@ A dedicated ingestion agent clones the repository and breaks every file into mea
 
 On the first run, the full codebase is ingested. On every subsequent push, only the changed files are updated. The process is fast and inexpensive.
 
+#### Step 3a — Walk the folder
+
+The agent scans the cloned repository at `/tmp/repos/{owner}-{repo}-{sha}` and walks all files. Binary files and files over a configurable size threshold (e.g. minified JS bundles, `package-lock.json`) are skipped.
+
+```
+/tmp/repos/acme-myrepo-a3f92c1/
+    src/
+        auth.py
+        payments.ts
+        utils.go
+    models/
+        user.java
+        order.rs
+    config/
+        settings.yaml   ← line-based fallback
+```
+
+#### Step 3b — Parse into chunks
+
+Files are not split by character count. tree-sitter is used as the primary parser for all languages it supports (Python, Java, TypeScript, Go, Rust, C, C++, Ruby, and 100+ more), producing complete, meaningful units. For any file type tree-sitter does not support, a line-based window fallback is used.
+
+| Approach | Result |
+|---|---|
+| Naive — split by character count | Chunks split mid-function. Meaningless in isolation. |
+| tree-sitter (all supported languages) | Each chunk is a complete function, class, or method. |
+| Line-based fallback (unsupported types) | Fixed-size line windows — used for config, YAML, etc. |
+
+A chunk boundary never falls in the middle of a function for any tree-sitter-supported language. When an agent retrieves context about payment processing, it gets a whole function — not fragments of two different ones.
+
+#### Step 3c — Embed each chunk
+
+Each chunk is converted into a vector — a list of numbers that captures its semantic meaning — using OpenAI `text-embedding-3-small`:
+
+```
+"def validate_user(email)..." → [0.23, -0.81, 0.45, 0.12, ...]
+                                  (1536 numbers)
+```
+
+Two functions that do similar things produce similar vectors, even if the code looks completely different. This is what enables search by meaning rather than by keyword.
+
+#### Step 3d — Store in ChromaDB
+
+ChromaDB stores three things per chunk:
+
+| Field | Value |
+|---|---|
+| `vector` | `[0.23, -0.81, 0.45, ...]` — used for similarity search |
+| `document` | `"def validate_user(..."` — the actual source code |
+| `metadata` | `{file: "auth.py", line: 12, type: "function"}` |
+
+Later, when an agent needs context, it queries ChromaDB with a natural language or code fragment. ChromaDB converts the query to a vector, finds the closest stored vectors, and returns the matching code chunks. This is RAG — Retrieval Augmented Generation.
+
+**Why this matters for false positive reduction:**
+
+Without ChromaDB:
+```
+Bug agent sees: amount has no upper limit check → flags as bug
+```
+
+With ChromaDB:
+```
+Bug agent sees: amount has no upper limit check
+Bug agent queries ChromaDB: find validators for payment amount
+ChromaDB returns: validate_payment_limit() in payments/validators.py
+Bug agent concludes: validation already exists upstream → not a bug
+```
+
+This context retrieval is the mechanism the critic agent uses to drop false positives before any finding reaches a human.
+
 ### Step 4 — Three specialist agents run in parallel
 
 With the codebase searchable and PR intent captured, three agents run simultaneously.
@@ -375,7 +444,7 @@ The system covers roughly 60–70% of the judgments a senior engineer makes duri
 |---|---|---|
 | Cannot reason about unwritten context | Decisions made verbally in meetings live nowhere in the codebase | Teams can document decisions as ADRs and ingest them |
 | Cannot make strategic architectural calls | Requires understanding of product direction, not just code patterns | Human approval step ensures engineers stay in the loop |
-| Java and Python only | tree-sitter and javalang parsers only | Additional language parsers can be added in a future version |
+| Unsupported file types use line-based chunking | tree-sitter does not cover every file format | Line-based fallback preserves context; quality is lower than AST-level chunks |
 | Large monorepos may be slow on first ingest | Full codebase embedding is a one-time expensive operation | Scoped ingestion per service can reduce initial cost |
 | Agent confidence scores are not perfectly calibrated | LLM outputs are probabilistic | LangSmith tracing allows ongoing recalibration |
 
@@ -391,8 +460,8 @@ The system covers roughly 60–70% of the judgments a senior engineer makes duri
 | Async server | Uvicorn | ASGI server for FastAPI |
 | HTTP client | httpx | Async calls to GitHub API |
 | Repo cloning | gitpython | Clones repositories programmatically |
-| Code parsing — Python | tree-sitter | AST-level chunking, not character splitting |
-| Code parsing — Java | javalang | Java-specific AST parsing |
+| Code parsing | tree-sitter | AST-level chunking for 100+ languages (Python, Java, TS, Go, Rust, C, C++, Ruby, and more) |
+| Code parsing fallback | line-based windowing | Fixed-size line windows for file types not supported by tree-sitter |
 | Embeddings | OpenAI text-embedding-3-small | Converts code chunks to vectors |
 | Vector database | ChromaDB | Stores and retrieves embedded code chunks by semantic similarity |
 | Agent orchestration | LangGraph | Manages parallel fan-out and sequential pipeline |
@@ -417,7 +486,7 @@ The system covers roughly 60–70% of the judgments a senior engineer makes duri
 | Phase | Weeks | Goal | Complexity |
 |---|---|---|---|
 | Foundation | 1–2 | GitHub webhook received and logged. GitHub App JWT auth working. PR diff fetched from GitHub API. Repo cloning working. | Low |
-| RAG pipeline | 3–4 | Codebase chunked, embedded, stored in ChromaDB. Retrieval function working against real diffs. | Medium |
+| RAG pipeline | 3–4 | Codebase walked — all files, binaries and oversized files skipped. Files parsed into function/class chunks via tree-sitter (100+ languages) with a line-based fallback for unsupported types. Chunks embedded via OpenAI text-embedding-3-small and stored in ChromaDB with source and metadata. Retrieval function working against real diffs. | Medium |
 | Specialist agents | 5–6 | Bug, security, and pattern agents running in parallel via LangGraph. Structured Pydantic outputs. LangSmith tracing active. | Medium–High |
 | Critic + dashboard | 7–8 | Critic agent filtering false positives. PostgreSQL introduced for findings storage. Human approval dashboard live. Full loop working end to end. | High |
 | PR writer + deployment | 9–10 | Formatted GitHub comments posting. Severity routing live. Educational layer added. Docker + Docker Compose added for deployment. Deployed to Railway and Vercel. | Medium |
