@@ -6,8 +6,9 @@ from fastapi import FastAPI, Request, HTTPException
 from dotenv import load_dotenv
 from app.github_client import get_pr_diff
 from app.repo_manager import clone_repo
+from app.agents.ingestion import run_ingestion
 
-load_dotenv()
+load_dotenv(override=True)
 
 app = FastAPI()
 
@@ -87,7 +88,20 @@ async def webhook(request: Request):
             print(f"Cloning repo at {head_sha[:7]}...")
             repo_path = await clone_repo(installation_id, owner, repo_name, head_sha)
             print(f"Repo ready: {repo_path}")
-            # TODO: pass diff + repo_path to ingestion agent
+
+            print("Running ingestion...")
+            ingestion_result = await run_ingestion(
+                diff=diff,
+                repo_path=repo_path,
+                owner=owner,
+                repo_name=repo_name,
+                head_sha=head_sha,
+            )
+            print(
+                f"Ingestion: {ingestion_result.chunks_stored} chunks "
+                f"({ingestion_result.mode}) → '{ingestion_result.collection_name}'"
+            )
+            # TODO Phase 3: pass ingestion_result.collection_name to analysis agents
 
     else:
         print(f"Payload: {json.dumps(payload, indent=2)}")

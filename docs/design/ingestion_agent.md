@@ -6,6 +6,12 @@ The ingestion agent takes the cloned repository and the PR diff, breaks every re
 
 This is Phase 2 of the build plan (weeks 3–4).
 
+### Why this is needed
+
+When a PR comes in, the analysis agents need to understand the **full codebase** — not just the changed lines. For example, if a PR adds a function that looks buggy, the agent needs to check: "does a validator for this already exist somewhere else?" To do that, it needs to search the entire repo by *meaning*, not just by keyword.
+
+Without this pipeline, agents only see the diff and have no way to retrieve surrounding context. That leads to false positives — flagging issues that are already handled elsewhere in the codebase. The ingestion pipeline is what makes context retrieval possible.
+
 ---
 
 ## Where it lives
@@ -122,7 +128,19 @@ Configurable via `IngestionConfig.max_file_bytes`.
 
 Supported languages include: Python, Java, JavaScript, TypeScript, Go, Rust, C, C++, Ruby, PHP, Swift, Kotlin, C#, Bash, and more.
 
-For each file, tree-sitter queries the AST for `function_definition`, `class_definition`, `method_definition`, and equivalent node types for the detected language. Each node becomes one chunk. Chunk boundaries never fall inside a function.
+For each file, tree-sitter reads the source and builds an AST (Abstract Syntax Tree) — a tree that represents the code's structure rather than its raw text:
+
+```
+file
+├── function: validate_user()      ← lines 1–25
+├── class: PaymentProcessor        ← lines 27–80
+│   ├── method: __init__()
+│   ├── method: charge()
+│   └── method: refund()
+└── function: send_email()         ← lines 82–100
+```
+
+tree-sitter queries the AST for `function_definition`, `class_definition`, `method_definition`, and equivalent node types for the detected language. Each node becomes one chunk. Chunk boundaries never fall inside a function.
 
 ### Fallback — line-based windowing
 
@@ -166,6 +184,15 @@ Each ChromaDB document carries this metadata:
 ---
 
 ## Embedding
+
+An embedding model takes a piece of text and outputs a list of numbers — a **vector** — that captures its semantic meaning:
+
+```
+"def validate_user(email)..." → [0.23, -0.81, 0.45, 0.12, ...]
+                                  (1536 numbers)
+```
+
+The critical property: **similar meaning → similar numbers**. Two functions that both validate user input will produce vectors that are numerically close to each other, even if the code looks completely different syntactically. This is what makes search-by-meaning possible — the vector database doesn't match keywords, it matches concepts.
 
 - Model: `text-embedding-3-small` (OpenAI)
 - Output: 1536-dimensional float vector per chunk
@@ -377,6 +404,39 @@ chromadb>=0.5.0
 ```
 
 > **Important:** the current environment has `tree-sitter==0.25.1` installed globally. Pin to `0.21.3` in a virtualenv (`python -m venv .venv && source .venv/bin/activate`) to avoid conflicts.
+
+---
+
+## How agents use ChromaDB (Phase 3+)
+
+Once ingestion has run, every analysis agent can query ChromaDB with natural language or a code fragment:
+
+```
+Query: "find validators for payment amount"
+```
+
+ChromaDB:
+1. Embeds the query string → `[0.19, -0.79, 0.51, ...]`
+2. Finds the stored vectors numerically closest to that query vector
+3. Returns the matching code chunks with their source text and metadata
+
+```
+Result: validate_payment_limit() in payments/validators.py (lines 42–67)
+```
+
+The agent now knows that validation already exists → it is not a bug. This is the mechanism the critic agent uses to drop false positives before any finding reaches a human.
+
+---
+
+## Summary
+
+| Step | Module | What happens |
+|---|---|---|
+| 1. Walk | `walker.py` | Find all source files; skip binaries, large files, dependency dirs |
+| 2. Parse | `parser.py` | Break each file into complete functions/classes via tree-sitter |
+| 3. Embed | `embedder.py` | Convert each chunk to a vector of numbers via OpenAI |
+| 4. Store | `store.py` | Save vectors + source code + metadata in ChromaDB |
+| 5. Search (later) | ChromaDB query | Agents retrieve context by meaning, not by keyword |
 
 ---
 
