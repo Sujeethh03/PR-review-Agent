@@ -3,15 +3,30 @@ import hashlib
 import json
 import os
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from app.github_client import get_pr_diff
 from app.repo_manager import clone_repo
 from app.agents.ingestion import run_ingestion
 from app.agents.specialist import run_specialist_agents
+from app.agents.critic import run_critic_agent
+from app.agents.critic.router import route_finding
+from app.db.findings_repo import save_review, save_findings
+from app.models.critic import finding_hash
+from app.api.findings import router as findings_router
 
 load_dotenv(override=True)
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["GET", "PATCH"],
+    allow_headers=["*"],
+)
+
+app.include_router(findings_router)
 
 WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
 if not WEBHOOK_SECRET:
@@ -45,7 +60,8 @@ async def webhook(request: Request):
     print("\n" + "="*50)
     print(f"Event received: {event_type}")
 
-    if event_type in ("security_advisory", "github_app_authorization"):
+    if event_type in ("security_advisory", "github_app_authorization",
+                      "check_suite", "check_run", "status"):
         return {"status": "ok", "event": event_type}
 
     if event_type == "push":
@@ -75,6 +91,7 @@ async def webhook(request: Request):
         owner, repo_name = repo.split("/", 1)
         installation_id = payload.get("installation", {}).get("id")
         head_sha        = pr.get("head", {}).get("sha")
+        pr_description  = pr.get("body", "") or ""
 
         print(f"PR action  : {action}")
         print(f"PR number  : #{number}")
@@ -82,47 +99,83 @@ async def webhook(request: Request):
         print(f"Author     : {author}")
 
         if action in ("opened", "synchronize") and installation_id and head_sha:
-            print(f"Fetching diff for PR #{number}...")
-            diff = await get_pr_diff(installation_id, owner, repo_name, number)
-            print(f"Diff fetched: {len(diff)} characters")
+            try:
+                print(f"Fetching diff for PR #{number}...")
+                diff = await get_pr_diff(installation_id, owner, repo_name, number)
+                print(f"Diff fetched: {len(diff)} characters")
 
-            print(f"Cloning repo at {head_sha[:7]}...")
-            repo_path = await clone_repo(installation_id, owner, repo_name, head_sha)
-            print(f"Repo ready: {repo_path}")
+                print(f"Cloning repo at {head_sha[:7]}...")
+                repo_path = await clone_repo(installation_id, owner, repo_name, head_sha)
+                print(f"Repo ready: {repo_path}")
 
-            print("Running ingestion...")
-            ingestion_result = await run_ingestion(
-                diff=diff,
-                repo_path=repo_path,
-                owner=owner,
-                repo_name=repo_name,
-                head_sha=head_sha,
-            )
-            print(
-                f"Ingestion: {ingestion_result.chunks_stored} chunks "
-                f"({ingestion_result.mode}) → '{ingestion_result.collection_name}'"
-            )
+                print("Running ingestion...")
+                ingestion_result = await run_ingestion(
+                    diff=diff,
+                    repo_path=repo_path,
+                    owner=owner,
+                    repo_name=repo_name,
+                    head_sha=head_sha,
+                )
+                print(
+                    f"Ingestion: {ingestion_result.chunks_stored} chunks "
+                    f"({ingestion_result.mode}) → '{ingestion_result.collection_name}'"
+                )
 
-            print("Running specialist agents...")
-            specialist_result = await run_specialist_agents(
-                diff=diff,
-                collection_name=ingestion_result.collection_name,
-                owner=owner,
-                repo_name=repo_name,
-            )
-            all_findings = specialist_result.all_findings()
-            print(
-                f"Findings: {len(all_findings)} total "
-                f"({len(specialist_result.bug.findings)} bug, "
-                f"{len(specialist_result.security.findings)} security, "
-                f"{len(specialist_result.pattern.findings)} pattern)"
-            )
-            for f in all_findings:
-                print(f"  [{f.severity.upper()}] {f.file}:{f.line_start} — {f.title} (conf: {f.confidence:.2f})")
-            # TODO Phase 4: pass all_findings to critic agent
+                print("Running specialist agents...")
+                specialist_result = await run_specialist_agents(
+                    diff=diff,
+                    collection_name=ingestion_result.collection_name,
+                    owner=owner,
+                    repo_name=repo_name,
+                )
+                all_findings = specialist_result.all_findings()
+                print(
+                    f"Specialist findings: {len(all_findings)} total "
+                    f"({len(specialist_result.bug.findings)} bug, "
+                    f"{len(specialist_result.security.findings)} security, "
+                    f"{len(specialist_result.pattern.findings)} pattern)"
+                )
+
+                print("Running critic agent...")
+                critic_output = await run_critic_agent(
+                    findings=all_findings,
+                    collection_name=ingestion_result.collection_name,
+                    diff=diff,
+                    repo_path=repo_path,
+                    pr_description=pr_description,
+                )
+                print(
+                    f"Critic: {len(critic_output.accepted)} accepted, "
+                    f"{len(critic_output.rejected)} rejected"
+                )
+
+                verdict_by_hash = {v.finding_hash: v for v in critic_output.verdicts}
+                routes = {
+                    finding_hash(f): route_finding(f, verdict_by_hash[finding_hash(f)])
+                    for f in critic_output.accepted
+                }
+
+                review_id = await save_review(
+                    owner, repo_name, number, head_sha,
+                    ingestion_result.collection_name,
+                )
+                await save_findings(
+                    review_id, critic_output.accepted, critic_output.verdicts, routes
+                )
+
+                for f in critic_output.accepted:
+                    fhash = finding_hash(f)
+                    route = routes[fhash]
+                    print(f"  [{f.severity.upper()}] [{route.upper()}] {f.file}:{f.line_start} — {f.title} (conf: {f.confidence:.2f})")
+
+                print(f"Saved to DB — review_id: {review_id}")
+                # TODO Phase 5: pass auto-routed findings to PR writer agent
+
+            except Exception as e:
+                print(f"Pipeline error: {e}")
 
     else:
-        print(f"Payload: {json.dumps(payload, indent=2)}")
+        print(f"Unhandled event: {event_type}")
 
     print("="*50 + "\n")
 
