@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from app.github_client import get_pr_diff
 from app.repo_manager import clone_repo
 from app.agents.ingestion import run_ingestion
+from app.agents.specialist import run_specialist_agents
 
 load_dotenv(override=True)
 
@@ -101,7 +102,24 @@ async def webhook(request: Request):
                 f"Ingestion: {ingestion_result.chunks_stored} chunks "
                 f"({ingestion_result.mode}) → '{ingestion_result.collection_name}'"
             )
-            # TODO Phase 3: pass ingestion_result.collection_name to analysis agents
+
+            print("Running specialist agents...")
+            specialist_result = await run_specialist_agents(
+                diff=diff,
+                collection_name=ingestion_result.collection_name,
+                owner=owner,
+                repo_name=repo_name,
+            )
+            all_findings = specialist_result.all_findings()
+            print(
+                f"Findings: {len(all_findings)} total "
+                f"({len(specialist_result.bug.findings)} bug, "
+                f"{len(specialist_result.security.findings)} security, "
+                f"{len(specialist_result.pattern.findings)} pattern)"
+            )
+            for f in all_findings:
+                print(f"  [{f.severity.upper()}] {f.file}:{f.line_start} — {f.title} (conf: {f.confidence:.2f})")
+            # TODO Phase 4: pass all_findings to critic agent
 
     else:
         print(f"Payload: {json.dumps(payload, indent=2)}")
