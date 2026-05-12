@@ -1,0 +1,30 @@
+from typing import Literal
+from pydantic import BaseModel
+
+
+class Finding(BaseModel):
+    file: str
+    line_start: int
+    line_end: int
+    severity: Literal["high", "medium", "low"]
+    category: str
+    title: str
+    description: str
+    suggestion: str
+    confidence: float                              # 0.0 – 1.0
+    agent: Literal["bug", "security", "pattern"]
+
+
+class AgentOutput(BaseModel):
+    agent: Literal["bug", "security", "pattern"]
+    findings: list[Finding]
+    error: str | None = None
+
+
+class SpecialistResult(BaseModel):
+    bug: AgentOutput
+    security: AgentOutput
+    pattern: AgentOutput
+
+    def all_findings(self) -> list[Finding]:
+        return self.bug.findings + self.security.findings + self.pattern.findings
