@@ -16,3 +16,5 @@ tree-sitter-go
 tree-sitter-rust
 tree-sitter-c
 tree-sitter-cpp
+langgraph>=0.1.0
+langsmith>=0.1.0
