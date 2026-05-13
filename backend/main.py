@@ -9,10 +9,9 @@ from app.github_client import get_pr_diff
 from app.repo_manager import clone_repo
 from app.agents.ingestion import run_ingestion
 from app.agents.specialist import run_specialist_agents
-from app.agents.critic import run_critic_agent
-from app.agents.critic.router import route_finding
+from app.agents.router import route_finding
 from app.db.findings_repo import save_review, save_findings
-from app.models.critic import finding_hash
+from app.models.findings import finding_hash
 from app.api.findings import router as findings_router
 
 load_dotenv(override=True)
@@ -91,7 +90,6 @@ async def webhook(request: Request):
         owner, repo_name = repo.split("/", 1)
         installation_id = payload.get("installation", {}).get("id")
         head_sha        = pr.get("head", {}).get("sha")
-        pr_description  = pr.get("body", "") or ""
 
         print(f"PR action  : {action}")
         print(f"PR number  : #{number}")
@@ -136,40 +134,19 @@ async def webhook(request: Request):
                     f"{len(specialist_result.pattern.findings)} pattern)"
                 )
 
-                print("Running critic agent...")
-                critic_output = await run_critic_agent(
-                    findings=all_findings,
-                    collection_name=ingestion_result.collection_name,
-                    diff=diff,
-                    repo_path=repo_path,
-                    pr_description=pr_description,
-                )
-                print(
-                    f"Critic: {len(critic_output.accepted)} accepted, "
-                    f"{len(critic_output.rejected)} rejected"
-                )
-
-                verdict_by_hash = {v.finding_hash: v for v in critic_output.verdicts}
-                routes = {
-                    finding_hash(f): route_finding(f, verdict_by_hash[finding_hash(f)])
-                    for f in critic_output.accepted
-                }
+                routes = {finding_hash(f): route_finding(f) for f in all_findings}
 
                 review_id = await save_review(
                     owner, repo_name, number, head_sha,
                     ingestion_result.collection_name,
                 )
-                await save_findings(
-                    review_id, critic_output.accepted, critic_output.verdicts, routes
-                )
+                await save_findings(review_id, all_findings, routes)
 
-                for f in critic_output.accepted:
-                    fhash = finding_hash(f)
-                    route = routes[fhash]
+                for f in all_findings:
+                    route = routes[finding_hash(f)]
                     print(f"  [{f.severity.upper()}] [{route.upper()}] {f.file}:{f.line_start} — {f.title} (conf: {f.confidence:.2f})")
 
                 print(f"Saved to DB — review_id: {review_id}")
-                # TODO Phase 5: pass auto-routed findings to PR writer agent
 
             except Exception as e:
                 print(f"Pipeline error: {e}")

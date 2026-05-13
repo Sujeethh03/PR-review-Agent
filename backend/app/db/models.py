@@ -44,8 +44,6 @@ class FindingRow(Base):
     description:      Mapped[str]           = mapped_column(Text)
     suggestion:       Mapped[str]           = mapped_column(Text)
     specialist_conf:  Mapped[float]         = mapped_column(Float)
-    critic_conf:      Mapped[float]         = mapped_column(Float)
-    critic_reasoning: Mapped[str]           = mapped_column(Text)
     route:            Mapped[str]           = mapped_column(String(10))
     status:           Mapped[FindingStatus] = mapped_column(
                           Enum(FindingStatus), default=FindingStatus.pending

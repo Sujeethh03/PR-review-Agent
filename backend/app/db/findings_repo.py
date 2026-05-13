@@ -1,7 +1,6 @@
 from datetime import datetime
 from sqlalchemy import select, func, Integer
-from app.models.findings import Finding
-from app.models.critic import CriticVerdict, finding_hash
+from app.models.findings import Finding, finding_hash
 from app.db.connection import get_session_factory
 from app.db.models import PRReview, FindingRow, FindingStatus
 
@@ -30,18 +29,11 @@ async def save_review(
 async def save_findings(
     review_id: int,
     findings: list[Finding],
-    verdicts: list[CriticVerdict],
     routes: dict[str, str],
 ) -> None:
-    verdict_by_hash = {v.finding_hash: v for v in verdicts}
-
     async with get_session_factory()() as session:
         for f in findings:
             fhash = finding_hash(f)
-            verdict = verdict_by_hash.get(fhash)
-            if verdict is None:
-                continue
-
             route = routes.get(fhash, "digest")
             status = (
                 FindingStatus.auto_posted if route == "auto"
@@ -62,8 +54,6 @@ async def save_findings(
                 description=f.description,
                 suggestion=f.suggestion,
                 specialist_conf=f.confidence,
-                critic_conf=verdict.final_confidence,
-                critic_reasoning=verdict.reasoning,
                 route=route,
                 status=status,
             )
@@ -77,7 +67,7 @@ async def get_pending_findings() -> list[FindingRow]:
         result = await session.execute(
             select(FindingRow)
             .where(FindingRow.status == FindingStatus.pending)
-            .order_by(FindingRow.critic_conf.desc())
+            .order_by(FindingRow.specialist_conf.desc())
         )
         return list(result.scalars().all())
 
