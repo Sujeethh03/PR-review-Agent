@@ -1,6 +1,6 @@
 import enum
 from datetime import datetime
-from sqlalchemy import String, Float, Integer, DateTime, Text, Enum, ForeignKey
+from sqlalchemy import String, Float, Integer, DateTime, Text, Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -31,8 +31,10 @@ class PRReview(Base):
 class FindingRow(Base):
     __tablename__ = "findings"
 
+    __table_args__ = (UniqueConstraint("pr_review_id", "finding_hash", name="uq_review_finding"),)
+
     id:               Mapped[int]           = mapped_column(Integer, primary_key=True)
-    finding_hash:     Mapped[str]           = mapped_column(String(64), unique=True)
+    finding_hash:     Mapped[str]           = mapped_column(String(64))
     pr_review_id:     Mapped[int]           = mapped_column(Integer, ForeignKey("pr_reviews.id"))
     agent:            Mapped[str]           = mapped_column(String(20))
     file:             Mapped[str]           = mapped_column(String(500))
