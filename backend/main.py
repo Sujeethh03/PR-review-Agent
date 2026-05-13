@@ -10,6 +10,7 @@ from app.repo_manager import clone_repo
 from app.agents.ingestion import run_ingestion
 from app.agents.specialist import run_specialist_agents
 from app.agents.router import route_finding
+from app.agents.pr_writer import run_pr_writer
 from app.db.findings_repo import save_review, save_findings
 from app.models.findings import finding_hash
 from app.api.findings import router as findings_router
@@ -147,6 +148,19 @@ async def webhook(request: Request):
                     print(f"  [{f.severity.upper()}] [{route.upper()}] {f.file}:{f.line_start} — {f.title} (conf: {f.confidence:.2f})")
 
                 print(f"Saved to DB — review_id: {review_id}")
+
+                auto_findings = [f for f in all_findings if routes[finding_hash(f)] == "auto"]
+                if auto_findings:
+                    print(f"Posting {len(auto_findings)} auto finding(s) to PR #{number}...")
+                    await run_pr_writer(
+                        findings=auto_findings,
+                        installation_id=installation_id,
+                        owner=owner,
+                        repo_name=repo_name,
+                        pr_number=number,
+                        head_sha=head_sha,
+                    )
+                    print(f"Posted to GitHub PR #{number}")
 
             except Exception as e:
                 print(f"Pipeline error: {e}")
