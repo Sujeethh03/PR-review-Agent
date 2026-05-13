@@ -1,10 +1,21 @@
-import { getReviews } from "@/lib/api";
+"use client";
+import { useEffect, useState } from "react";
+import { getReviews, Review } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 
-export default async function ReviewsPage() {
-  const reviews = await getReviews();
+export default function ReviewsPage() {
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getReviews()
+      .then(setReviews)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
 
   return (
     <main className="container mx-auto py-8 px-4 space-y-6">
@@ -18,13 +29,14 @@ export default async function ReviewsPage() {
         </Link>
       </div>
 
-      {reviews.length === 0 ? (
+      {loading && <p className="text-muted-foreground">Loading...</p>}
+      {error && <p className="text-destructive">Error: {error}</p>}
+      {!loading && !error && reviews.length === 0 && (
         <Card>
-          <CardHeader>
-            <CardTitle>No reviews yet</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle>No reviews yet</CardTitle></CardHeader>
         </Card>
-      ) : (
+      )}
+      {!loading && !error && reviews.length > 0 && (
         <div className="space-y-4">
           {reviews.map((r) => (
             <Card key={r.id}>
