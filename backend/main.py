@@ -61,7 +61,9 @@ async def webhook(request: Request):
     print(f"Event received: {event_type}")
 
     if event_type in ("security_advisory", "github_app_authorization",
-                      "check_suite", "check_run", "status"):
+                      "check_suite", "check_run", "status",
+                      "pull_request_review", "pull_request_review_comment",
+                      "pull_request_review_thread"):
         return {"status": "ok", "event": event_type}
 
     if event_type == "push":
