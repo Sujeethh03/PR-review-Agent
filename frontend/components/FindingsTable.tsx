@@ -87,17 +87,17 @@ export function FindingsTable({ initial }: { initial: Finding[] }) {
                     <Button
                       size="sm"
                       onClick={() => handle(f.id, "approve")}
-                      disabled={loading === f.id}
+                      disabled={loading !== null}
                     >
-                      Approve
+                      {loading === f.id ? "Posting…" : "Approve"}
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={() => handle(f.id, "dismiss")}
-                      disabled={loading === f.id}
+                      disabled={loading !== null}
                     >
-                      Dismiss
+                      {loading === f.id ? "…" : "Dismiss"}
                     </Button>
                   </div>
                 </TableCell>
