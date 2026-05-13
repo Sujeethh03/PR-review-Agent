@@ -141,7 +141,7 @@ async def webhook(request: Request):
 
                 review_id = await save_review(
                     owner, repo_name, number, head_sha,
-                    ingestion_result.collection_name,
+                    installation_id, ingestion_result.collection_name,
                 )
                 await save_findings(review_id, all_findings, routes)
 

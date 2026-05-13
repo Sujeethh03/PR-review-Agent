@@ -10,6 +10,7 @@ async def save_review(
     repo_name: str,
     pr_number: int,
     head_sha: str,
+    installation_id: int,
     collection_name: str,
 ) -> int:
     async with get_session_factory()() as session:
@@ -18,6 +19,7 @@ async def save_review(
             repo_name=repo_name,
             pr_number=pr_number,
             head_sha=head_sha,
+            installation_id=installation_id,
             collection_name=collection_name,
         )
         session.add(review)
@@ -70,6 +72,14 @@ async def get_pending_findings() -> list[FindingRow]:
             .order_by(FindingRow.specialist_conf.desc())
         )
         return list(result.scalars().all())
+
+
+async def get_review_by_id(review_id: int) -> PRReview | None:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(PRReview).where(PRReview.id == review_id)
+        )
+        return result.scalar_one_or_none()
 
 
 async def get_finding_by_id(finding_id: int) -> FindingRow | None:

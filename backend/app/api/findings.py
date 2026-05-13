@@ -3,10 +3,13 @@ from pydantic import BaseModel
 from app.db.findings_repo import (
     get_pending_findings,
     get_finding_by_id,
+    get_review_by_id,
     resolve_finding,
     get_review_summaries,
 )
 from app.db.models import FindingRow, FindingStatus
+from app.models.findings import Finding
+from app.agents.pr_writer import run_pr_writer
 
 router = APIRouter()
 
@@ -38,6 +41,21 @@ def _serialize(row: FindingRow) -> dict:
     }
 
 
+def _row_to_finding(row: FindingRow) -> Finding:
+    return Finding(
+        file=row.file,
+        line_start=row.line_start,
+        line_end=row.line_end,
+        severity=row.severity,
+        category=row.category,
+        title=row.title,
+        description=row.description,
+        suggestion=row.suggestion,
+        confidence=row.specialist_conf,
+        agent=row.agent,
+    )
+
+
 @router.get("/findings")
 async def list_findings() -> list[dict]:
     rows = await get_pending_findings()
@@ -62,6 +80,21 @@ async def approve_finding(finding_id: int, body: ResolveRequest) -> dict:
     row = await resolve_finding(finding_id, FindingStatus.approved, body.resolved_by)
     if row is None:
         raise HTTPException(status_code=404, detail="Finding not found")
+
+    review = await get_review_by_id(row.pr_review_id)
+    if review is not None and review.installation_id:
+        try:
+            await run_pr_writer(
+                findings=[_row_to_finding(row)],
+                installation_id=review.installation_id,
+                owner=review.owner,
+                repo_name=review.repo_name,
+                pr_number=review.pr_number,
+                head_sha=review.head_sha,
+            )
+        except Exception as e:
+            print(f"Warning: failed to post approved finding to GitHub: {e}")
+
     return _serialize(row)
 
 

@@ -14,14 +14,18 @@ import {
 export function FindingsTable({ initial }: { initial: Finding[] }) {
   const [findings, setFindings] = useState(initial);
   const [loading, setLoading] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function handle(id: number, action: "approve" | "dismiss") {
     setLoading(id);
+    setError(null);
     try {
       const updated = action === "approve"
         ? await approveFinding(id)
         : await dismissFinding(id);
       setFindings((prev) => prev.filter((f) => f.id !== updated.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Action failed");
     } finally {
       setLoading(null);
     }
@@ -44,7 +48,10 @@ export function FindingsTable({ initial }: { initial: Finding[] }) {
         <CardTitle>Pending Findings</CardTitle>
         <CardDescription>{findings.length} finding(s) awaiting review</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        {error && (
+          <p className="text-sm text-destructive">Error: {error}</p>
+        )}
         <Table>
           <TableHeader>
             <TableRow>

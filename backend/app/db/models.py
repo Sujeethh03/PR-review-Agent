@@ -24,6 +24,7 @@ class PRReview(Base):
     repo_name:       Mapped[str]      = mapped_column(String(255))
     pr_number:       Mapped[int]      = mapped_column(Integer)
     head_sha:        Mapped[str]      = mapped_column(String(40))
+    installation_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     collection_name: Mapped[str]      = mapped_column(String(255))
     created_at:      Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
