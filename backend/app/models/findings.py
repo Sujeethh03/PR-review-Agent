@@ -33,4 +33,9 @@ class SpecialistResult(BaseModel):
     pattern: AgentOutput
 
     def all_findings(self) -> list[Finding]:
-        return self.bug.findings + self.security.findings + self.pattern.findings
+        seen: dict[tuple, Finding] = {}
+        for f in self.bug.findings + self.security.findings + self.pattern.findings:
+            key = (f.file, f.line_start, f.category)
+            if key not in seen or f.confidence > seen[key].confidence:
+                seen[key] = f
+        return list(seen.values())
