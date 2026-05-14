@@ -1,13 +1,13 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from app.db.findings_repo import (
-    get_pending_findings,
+    get_findings_by_status,
     get_finding_by_id,
     get_review_by_id,
     resolve_finding,
     get_review_summaries,
 )
-from app.db.models import FindingRow, FindingStatus
+from app.db.models import FindingRow, PRReview, FindingStatus
 from app.models.findings import Finding
 from app.agents.pr_writer import run_pr_writer
 
@@ -18,8 +18,8 @@ class ResolveRequest(BaseModel):
     resolved_by: str = "dashboard"
 
 
-def _serialize(row: FindingRow) -> dict:
-    return {
+def _serialize(row: FindingRow, review: PRReview | None = None) -> dict:
+    d = {
         "id":              row.id,
         "finding_hash":    row.finding_hash,
         "pr_review_id":    row.pr_review_id,
@@ -39,6 +39,12 @@ def _serialize(row: FindingRow) -> dict:
         "resolved_at":     row.resolved_at.isoformat() if row.resolved_at else None,
         "resolved_by":     row.resolved_by,
     }
+    if review:
+        d["owner"]      = review.owner
+        d["repo_name"]  = review.repo_name
+        d["pr_number"]  = review.pr_number
+        d["head_sha"]   = review.head_sha
+    return d
 
 
 def _row_to_finding(row: FindingRow) -> Finding:
@@ -57,9 +63,9 @@ def _row_to_finding(row: FindingRow) -> Finding:
 
 
 @router.get("/findings")
-async def list_findings() -> list[dict]:
-    rows = await get_pending_findings()
-    return [_serialize(r) for r in rows]
+async def list_findings(status: str | None = Query(default=None)) -> list[dict]:
+    pairs = await get_findings_by_status(status)
+    return [_serialize(row, review) for row, review in pairs]
 
 
 @router.get("/findings/{finding_id}")
@@ -67,7 +73,8 @@ async def get_finding(finding_id: int) -> dict:
     row = await get_finding_by_id(finding_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Finding not found")
-    return _serialize(row)
+    review = await get_review_by_id(row.pr_review_id)
+    return _serialize(row, review)
 
 
 @router.get("/reviews")
@@ -95,7 +102,7 @@ async def approve_finding(finding_id: int, body: ResolveRequest) -> dict:
         except Exception as e:
             print(f"Warning: failed to post approved finding to GitHub: {e}")
 
-    return _serialize(row)
+    return _serialize(row, review)
 
 
 @router.patch("/findings/{finding_id}/dismiss")
@@ -103,4 +110,5 @@ async def dismiss_finding(finding_id: int, body: ResolveRequest) -> dict:
     row = await resolve_finding(finding_id, FindingStatus.dismissed, body.resolved_by)
     if row is None:
         raise HTTPException(status_code=404, detail="Finding not found")
-    return _serialize(row)
+    review = await get_review_by_id(row.pr_review_id)
+    return _serialize(row, review)

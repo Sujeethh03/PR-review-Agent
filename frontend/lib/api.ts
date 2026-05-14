@@ -19,6 +19,11 @@ export interface Finding {
   created_at: string;
   resolved_at: string | null;
   resolved_by: string | null;
+  // joined from pr_reviews
+  owner?: string;
+  repo_name?: string;
+  pr_number?: number;
+  head_sha?: string;
 }
 
 export interface Review {
@@ -34,8 +39,9 @@ export interface Review {
   dismissed: number;
 }
 
-export async function getFindings(): Promise<Finding[]> {
-  const res = await fetch(`${BASE}/findings`, { cache: "no-store" });
+export async function getFindings(status?: string): Promise<Finding[]> {
+  const url = status ? `${BASE}/findings?status=${status}` : `${BASE}/findings`;
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error("Failed to fetch findings");
   return res.json();
 }

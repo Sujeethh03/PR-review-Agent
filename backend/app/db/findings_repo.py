@@ -64,14 +64,28 @@ async def save_findings(
         await session.commit()
 
 
-async def get_pending_findings() -> list[FindingRow]:
+async def get_findings_by_status(
+    status: str | None = None,
+) -> list[tuple[FindingRow, PRReview]]:
+    _status_map = {
+        "approved":    FindingStatus.approved,
+        "dismissed":   FindingStatus.dismissed,
+        "auto_posted": FindingStatus.auto_posted,
+        "digest":      FindingStatus.digest,
+    }
     async with get_session_factory()() as session:
-        result = await session.execute(
-            select(FindingRow)
-            .where(FindingRow.status == FindingStatus.pending)
+        query = (
+            select(FindingRow, PRReview)
+            .join(PRReview, FindingRow.pr_review_id == PRReview.id)
             .order_by(FindingRow.specialist_conf.desc())
         )
-        return list(result.scalars().all())
+        if status and status != "all":
+            mapped = _status_map.get(status, FindingStatus.pending)
+            query = query.where(FindingRow.status == mapped)
+        elif status != "all":
+            query = query.where(FindingRow.status == FindingStatus.pending)
+        result = await session.execute(query)
+        return list(result.all())
 
 
 async def get_review_by_id(review_id: int) -> PRReview | None:
