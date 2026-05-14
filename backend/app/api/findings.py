@@ -6,6 +6,7 @@ from app.db.findings_repo import (
     get_review_by_id,
     resolve_finding,
     get_review_summaries,
+    get_finding_counts,
 )
 from app.db.models import FindingRow, PRReview, FindingStatus
 from app.models.findings import Finding
@@ -75,6 +76,11 @@ async def get_finding(finding_id: int) -> dict:
         raise HTTPException(status_code=404, detail="Finding not found")
     review = await get_review_by_id(row.pr_review_id)
     return _serialize(row, review)
+
+
+@router.get("/stats")
+async def stats() -> dict:
+    return await get_finding_counts()
 
 
 @router.get("/reviews")

@@ -52,6 +52,21 @@ export async function getFinding(id: number): Promise<Finding> {
   return res.json();
 }
 
+export interface Stats {
+  total: number;
+  pending: number;
+  approved: number;
+  dismissed: number;
+  auto_posted: number;
+  digest: number;
+}
+
+export async function getStats(): Promise<Stats> {
+  const res = await fetch(`${BASE}/stats`, { cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to fetch stats");
+  return res.json();
+}
+
 export async function getReviews(): Promise<Review[]> {
   const res = await fetch(`${BASE}/reviews`, { cache: "no-store" });
   if (!res.ok) throw new Error("Failed to fetch reviews");

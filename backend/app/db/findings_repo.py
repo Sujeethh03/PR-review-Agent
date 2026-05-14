@@ -88,6 +88,22 @@ async def get_findings_by_status(
         return list(result.all())
 
 
+async def get_finding_counts() -> dict[str, int]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(FindingRow.status, func.count(FindingRow.id)).group_by(FindingRow.status)
+        )
+        counts = {row[0].value: row[1] for row in result.all()}
+    return {
+        "total":      sum(counts.values()),
+        "pending":    counts.get("pending", 0),
+        "approved":   counts.get("approved", 0),
+        "dismissed":  counts.get("dismissed", 0),
+        "auto_posted":counts.get("auto_posted", 0),
+        "digest":     counts.get("digest", 0),
+    }
+
+
 async def get_review_by_id(review_id: int) -> PRReview | None:
     async with get_session_factory()() as session:
         result = await session.execute(
