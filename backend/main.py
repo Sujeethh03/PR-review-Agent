@@ -3,15 +3,30 @@ import hashlib
 import json
 import os
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from app.github_client import get_pr_diff
 from app.repo_manager import clone_repo
 from app.agents.ingestion import run_ingestion
 from app.agents.specialist import run_specialist_agents
+from app.agents.router import route_finding
+from app.agents.pr_writer import run_pr_writer
+from app.db.findings_repo import save_review, save_findings, dismiss_stale_findings
+from app.models.findings import finding_hash
+from app.api.findings import router as findings_router
 
 load_dotenv(override=True)
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(findings_router)
 
 WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
 if not WEBHOOK_SECRET:
@@ -45,7 +60,10 @@ async def webhook(request: Request):
     print("\n" + "="*50)
     print(f"Event received: {event_type}")
 
-    if event_type in ("security_advisory", "github_app_authorization"):
+    if event_type in ("security_advisory", "github_app_authorization",
+                      "check_suite", "check_run", "status",
+                      "pull_request_review", "pull_request_review_comment",
+                      "pull_request_review_thread"):
         return {"status": "ok", "event": event_type}
 
     if event_type == "push":
@@ -81,48 +99,85 @@ async def webhook(request: Request):
         print(f"Title      : {title}")
         print(f"Author     : {author}")
 
-        if action in ("opened", "synchronize") and installation_id and head_sha:
-            print(f"Fetching diff for PR #{number}...")
-            diff = await get_pr_diff(installation_id, owner, repo_name, number)
-            print(f"Diff fetched: {len(diff)} characters")
+        if action == "closed":
+            dismissed = await dismiss_stale_findings(owner, repo_name, number)
+            print(f"PR #{number} closed — dismissed {dismissed} pending finding(s)")
 
-            print(f"Cloning repo at {head_sha[:7]}...")
-            repo_path = await clone_repo(installation_id, owner, repo_name, head_sha)
-            print(f"Repo ready: {repo_path}")
+        elif action in ("opened", "synchronize") and installation_id and head_sha:
+            try:
+                print(f"Fetching diff for PR #{number}...")
+                diff = await get_pr_diff(installation_id, owner, repo_name, number)
+                print(f"Diff fetched: {len(diff)} characters")
 
-            print("Running ingestion...")
-            ingestion_result = await run_ingestion(
-                diff=diff,
-                repo_path=repo_path,
-                owner=owner,
-                repo_name=repo_name,
-                head_sha=head_sha,
-            )
-            print(
-                f"Ingestion: {ingestion_result.chunks_stored} chunks "
-                f"({ingestion_result.mode}) → '{ingestion_result.collection_name}'"
-            )
+                print(f"Cloning repo at {head_sha[:7]}...")
+                repo_path = await clone_repo(installation_id, owner, repo_name, head_sha)
+                print(f"Repo ready: {repo_path}")
 
-            print("Running specialist agents...")
-            specialist_result = await run_specialist_agents(
-                diff=diff,
-                collection_name=ingestion_result.collection_name,
-                owner=owner,
-                repo_name=repo_name,
-            )
-            all_findings = specialist_result.all_findings()
-            print(
-                f"Findings: {len(all_findings)} total "
-                f"({len(specialist_result.bug.findings)} bug, "
-                f"{len(specialist_result.security.findings)} security, "
-                f"{len(specialist_result.pattern.findings)} pattern)"
-            )
-            for f in all_findings:
-                print(f"  [{f.severity.upper()}] {f.file}:{f.line_start} — {f.title} (conf: {f.confidence:.2f})")
-            # TODO Phase 4: pass all_findings to critic agent
+                print("Running ingestion...")
+                ingestion_result = await run_ingestion(
+                    diff=diff,
+                    repo_path=repo_path,
+                    owner=owner,
+                    repo_name=repo_name,
+                    head_sha=head_sha,
+                )
+                print(
+                    f"Ingestion: {ingestion_result.chunks_stored} chunks "
+                    f"({ingestion_result.mode}) → '{ingestion_result.collection_name}'"
+                )
+
+                print("Running specialist agents...")
+                specialist_result = await run_specialist_agents(
+                    diff=diff,
+                    collection_name=ingestion_result.collection_name,
+                    owner=owner,
+                    repo_name=repo_name,
+                )
+                all_findings = specialist_result.all_findings()
+                print(
+                    f"Specialist findings: {len(all_findings)} total "
+                    f"({len(specialist_result.bug.findings)} bug, "
+                    f"{len(specialist_result.security.findings)} security, "
+                    f"{len(specialist_result.pattern.findings)} pattern)"
+                )
+
+                routes = {finding_hash(f): route_finding(f) for f in all_findings}
+
+                review_id = await save_review(
+                    owner, repo_name, number, head_sha,
+                    installation_id, ingestion_result.collection_name,
+                )
+                await save_findings(review_id, all_findings, routes)
+
+                # Dismiss pending findings from previous commits to the same PR
+                dismissed = await dismiss_stale_findings(owner, repo_name, number, exclude_review_id=review_id)
+                if dismissed:
+                    print(f"Dismissed {dismissed} stale finding(s) from previous commits")
+
+                for f in all_findings:
+                    route = routes[finding_hash(f)]
+                    print(f"  [{f.severity.upper()}] [{route.upper()}] {f.file}:{f.line_start} — {f.title} (conf: {f.confidence:.2f})")
+
+                print(f"Saved to DB — review_id: {review_id}")
+
+                auto_findings = [f for f in all_findings if routes[finding_hash(f)] == "auto"]
+                if auto_findings:
+                    print(f"Posting {len(auto_findings)} auto finding(s) to PR #{number}...")
+                    await run_pr_writer(
+                        findings=auto_findings,
+                        installation_id=installation_id,
+                        owner=owner,
+                        repo_name=repo_name,
+                        pr_number=number,
+                        head_sha=head_sha,
+                    )
+                    print(f"Posted to GitHub PR #{number}")
+
+            except Exception as e:
+                print(f"Pipeline error: {e}")
 
     else:
-        print(f"Payload: {json.dumps(payload, indent=2)}")
+        print(f"Unhandled event: {event_type}")
 
     print("="*50 + "\n")
 
