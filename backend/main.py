@@ -11,7 +11,7 @@ from app.agents.ingestion import run_ingestion
 from app.agents.specialist import run_specialist_agents
 from app.agents.router import route_finding
 from app.agents.pr_writer import run_pr_writer
-from app.db.findings_repo import save_review, save_findings
+from app.db.findings_repo import save_review, save_findings, dismiss_stale_findings
 from app.models.findings import finding_hash
 from app.api.findings import router as findings_router
 
@@ -99,7 +99,11 @@ async def webhook(request: Request):
         print(f"Title      : {title}")
         print(f"Author     : {author}")
 
-        if action in ("opened", "synchronize") and installation_id and head_sha:
+        if action == "closed":
+            dismissed = await dismiss_stale_findings(owner, repo_name, number)
+            print(f"PR #{number} closed — dismissed {dismissed} pending finding(s)")
+
+        elif action in ("opened", "synchronize") and installation_id and head_sha:
             try:
                 print(f"Fetching diff for PR #{number}...")
                 diff = await get_pr_diff(installation_id, owner, repo_name, number)
@@ -144,6 +148,11 @@ async def webhook(request: Request):
                     installation_id, ingestion_result.collection_name,
                 )
                 await save_findings(review_id, all_findings, routes)
+
+                # Dismiss pending findings from previous commits to the same PR
+                dismissed = await dismiss_stale_findings(owner, repo_name, number, exclude_review_id=review_id)
+                if dismissed:
+                    print(f"Dismissed {dismissed} stale finding(s) from previous commits")
 
                 for f in all_findings:
                     route = routes[finding_hash(f)]

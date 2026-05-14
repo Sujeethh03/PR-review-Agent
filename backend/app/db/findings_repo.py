@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import select, func, Integer
+from sqlalchemy import select, update, func, Integer
 from app.models.findings import Finding, finding_hash
 from app.db.connection import get_session_factory
 from app.db.models import PRReview, FindingRow, FindingStatus
@@ -86,6 +86,44 @@ async def get_findings_by_status(
             query = query.where(FindingRow.status == FindingStatus.pending)
         result = await session.execute(query)
         return list(result.all())
+
+
+async def dismiss_stale_findings(
+    owner: str,
+    repo_name: str,
+    pr_number: int,
+    exclude_review_id: int | None = None,
+) -> int:
+    """Dismiss pending findings from previous reviews of the same PR.
+    Pass exclude_review_id to keep the current review's findings untouched.
+    Returns the number of findings dismissed."""
+    async with get_session_factory()() as session:
+        review_query = select(PRReview.id).where(
+            PRReview.owner == owner,
+            PRReview.repo_name == repo_name,
+            PRReview.pr_number == pr_number,
+        )
+        if exclude_review_id is not None:
+            review_query = review_query.where(PRReview.id != exclude_review_id)
+
+        stale_ids = [r[0] for r in (await session.execute(review_query)).all()]
+        if not stale_ids:
+            return 0
+
+        result = await session.execute(
+            update(FindingRow)
+            .where(
+                FindingRow.pr_review_id.in_(stale_ids),
+                FindingRow.status == FindingStatus.pending,
+            )
+            .values(
+                status=FindingStatus.dismissed,
+                resolved_at=datetime.utcnow(),
+                resolved_by="system:superseded",
+            )
+        )
+        await session.commit()
+        return result.rowcount
 
 
 async def get_finding_counts() -> dict[str, int]:
