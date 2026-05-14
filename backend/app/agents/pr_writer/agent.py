@@ -1,7 +1,9 @@
+import asyncio
 import httpx
 from app.models.findings import Finding
 from app.github_client import get_installation_token, GITHUB_API
 from .formatter import format_finding_comment, format_summary_comment
+from .suggester import generate_suggestion
 
 
 async def run_pr_writer(
@@ -11,6 +13,7 @@ async def run_pr_writer(
     repo_name: str,
     pr_number: int,
     head_sha: str,
+    diff: str = "",
 ) -> None:
     if not findings:
         return
@@ -22,20 +25,32 @@ async def run_pr_writer(
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    inline_comments = [
-        {"path": f.file, "line": f.line_start, "body": format_finding_comment(f)}
-        for f in findings
-    ]
-
-    posted = await _post_review(
-        headers, owner, repo_name, pr_number, head_sha, inline_comments
-    )
-
-    # If inline comments were rejected (lines not in diff), fall back to a PR body comment
-    if not posted:
-        await _post_body_comment(
-            headers, owner, repo_name, pr_number, findings
+    # Generate suggestions concurrently — fall back to None on any error
+    suggestions: list[str | None] = list(
+        await asyncio.gather(
+            *[generate_suggestion(f, diff) for f in findings],
+            return_exceptions=True,
         )
+    )
+    suggestions = [s if isinstance(s, str) else None for s in suggestions]
+
+    inline_comments = []
+    for f, suggestion in zip(findings, suggestions):
+        comment: dict = {
+            "path": f.file,
+            "line": f.line_end,
+            "side": "RIGHT",
+            "body": format_finding_comment(f, suggestion),
+        }
+        if f.line_start != f.line_end:
+            comment["start_line"] = f.line_start
+            comment["start_side"] = "RIGHT"
+        inline_comments.append(comment)
+
+    posted = await _post_review(headers, owner, repo_name, pr_number, head_sha, inline_comments)
+
+    if not posted:
+        await _post_body_comment(headers, owner, repo_name, pr_number, findings)
 
 
 async def _post_review(
@@ -58,11 +73,8 @@ async def _post_review(
         )
         if response.status_code in (200, 201):
             return True
-
-        # 422 means one or more lines aren't in the diff — retry without inline comments
         if response.status_code == 422:
             return False
-
         response.raise_for_status()
         return True
 

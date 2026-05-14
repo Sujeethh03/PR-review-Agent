@@ -170,6 +170,7 @@ async def webhook(request: Request):
                         repo_name=repo_name,
                         pr_number=number,
                         head_sha=head_sha,
+                        diff=diff,
                     )
                     print(f"Posted to GitHub PR #{number}")
 

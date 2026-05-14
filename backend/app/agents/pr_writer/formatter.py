@@ -8,19 +8,29 @@ _SEVERITY_LABEL = {
 }
 
 
-def format_finding_comment(finding: Finding) -> str:
+def format_finding_comment(finding: Finding, suggested_code: str | None = None) -> str:
     label = _SEVERITY_LABEL.get(finding.severity, finding.severity.upper())
     educational = get_educational_context(finding)
 
     parts = [
         f"## {label} — {finding.title}",
-        f"",
+        "",
         f"**Category:** `{finding.category}` &nbsp;|&nbsp; **Agent:** {finding.agent} &nbsp;|&nbsp; **Confidence:** {finding.confidence:.0%}",
-        f"",
+        "",
         finding.description,
-        f"",
+        "",
         f"**Suggestion:** {finding.suggestion}",
     ]
+
+    if suggested_code:
+        parts += [
+            "",
+            "**Suggested fix** *(click Apply suggestion to accept):*",
+            "",
+            "```suggestion",
+            suggested_code,
+            "```",
+        ]
 
     if educational:
         parts += ["", "---", "", educational]
