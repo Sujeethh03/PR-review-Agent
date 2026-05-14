@@ -1,14 +1,14 @@
 ---
 title: Multi-Agent Code Review System
 subtitle: Product Design Document
-version: 1.0.0
-status: Draft
+version: 1.1.0
+status: Active
 author: 
 created: 2026-04-06
-last_updated: 2026-04-06
+last_updated: 2026-05-14
 reviewed_by: 
 approved_by: 
-next_review: 2026-05-06
+next_review: 2026-06-14
 classification: Internal
 project_code: CR-001
 repository: github.com/your-org/code-review-agent
@@ -28,14 +28,14 @@ tags: [ai, agents, code-review, langgraph, fastapi, rag, github]
 | Field | Details |
 |---|---|
 | **Document title** | Multi-Agent Code Review System — Product Design Document |
-| **Version** | 1.0.0 |
-| **Status** | Draft |
+| **Version** | 1.1.0 |
+| **Status** | Active |
 | **Author** | — |
 | **Created** | 06 April 2026 |
-| **Last updated** | 06 April 2026 |
+| **Last updated** | 14 May 2026 |
 | **Reviewed by** | — |
 | **Approved by** | — |
-| **Next review date** | 06 May 2026 |
+| **Next review date** | 14 June 2026 |
 | **Classification** | Internal |
 | **Project code** | CR-001 |
 | **Repository** | github.com/your-org/code-review-agent |
@@ -46,7 +46,8 @@ tags: [ai, agents, code-review, langgraph, fastapi, rag, github]
 
 | Version | Date | Author | Status | Summary of changes |
 |---|---|---|---|---|
-| 1.0.0 | 06 Apr 2026 | — | Draft | Initial document — full system design including severity routing, PR intent awareness, and educational comment layer |
+| 1.0.0 | 06 Apr 2026 | — | Superseded | Initial document — full system design including critic agent, severity routing, PR intent awareness, and educational comment layer |
+| 1.1.0 | 14 May 2026 | — | Active | Updated to reflect implemented system: critic agent removed, direct confidence routing, PR writer agent with OWASP educational layer and GPT-4o suggestion blocks, Next.js approval dashboard, stale finding cleanup. Phases 1–5 complete (minus deployment). |
 
 ---
 
@@ -55,10 +56,10 @@ tags: [ai, agents, code-review, langgraph, fastapi, rag, github]
 | Stage | Owner | Status | Date |
 |---|---|---|---|
 | First draft | Author | ✅ Complete | 06 Apr 2026 |
+| v1.1 update | Author | ✅ Complete | 14 May 2026 |
 | Technical review | Tech lead | ⬜ Pending | — |
 | Product review | Product owner | ⬜ Pending | — |
 | Final approval | — | ⬜ Pending | — |
-| Published | — | ⬜ Pending | — |
 
 ---
 
@@ -67,16 +68,17 @@ tags: [ai, agents, code-review, langgraph, fastapi, rag, github]
 1. [Overview](#1-overview)
 2. [The Problem](#2-the-problem)
 3. [What It Is](#3-what-it-is)
-4. [Full System Flow](#4-full-system-flow)
-5. [How It Works — Step by Step](#5-how-it-works--step-by-step)
-6. [Trust Model](#6-trust-model)
-7. [Design Additions](#7-design-additions)
-8. [What It Solves](#8-what-it-solves)
-9. [Known Limitations](#9-known-limitations)
-10. [Technology Stack](#10-technology-stack)
-11. [Build Plan](#11-build-plan)
-12. [Open Questions](#12-open-questions)
-13. [Glossary](#13-glossary)
+4. [Current System Structure](#4-current-system-structure)
+5. [Full System Flow](#5-full-system-flow)
+6. [How It Works — Step by Step](#6-how-it-works--step-by-step)
+7. [Trust Model](#7-trust-model)
+8. [Design Decisions](#8-design-decisions)
+9. [What It Solves](#9-what-it-solves)
+10. [Known Limitations](#10-known-limitations)
+11. [Technology Stack](#11-technology-stack)
+12. [Build Plan](#12-build-plan)
+13. [Open Questions](#13-open-questions)
+14. [Glossary](#14-glossary)
 
 ---
 
@@ -89,7 +91,6 @@ tags: [ai, agents, code-review, langgraph, fastapi, rag, github]
 | **Target users** | Engineering teams using GitHub for code review |
 | **Primary language support** | All languages (tree-sitter for 100+ languages, line-based fallback for the rest) |
 | **Deployment target** | Railway / Fly.io (backend), Vercel (dashboard) |
-| **Estimated build time** | 8–10 weeks |
 | **Trust level default** | Level 1 — read only |
 | **Review turnaround** | Under 60 seconds from push to findings |
 
@@ -99,14 +100,7 @@ This document describes the full product design for the Multi-Agent Code Review 
 
 ### Scope
 
-This document covers the end-to-end pipeline from GitHub webhook to posted PR comment, including all agent logic, the human approval dashboard, severity routing, PR intent awareness, and the educational comment layer. It does not cover billing, user authentication for the dashboard, or multi-repository organisation management — these are deferred to a future version.
-
-### Out of Scope
-
-- Multi-organisation / SaaS billing model
-- Dashboard user authentication and role management
-- Integration with code review tools other than GitHub (beyond what is already excluded below)
-- Integration with code review tools other than GitHub
+This document covers the end-to-end pipeline from GitHub webhook to posted PR comment, including all agent logic, the human approval dashboard, severity routing, and the educational comment layer. It does not cover billing, user authentication for the dashboard, or multi-repository organisation management — these are deferred to a future version.
 
 ---
 
@@ -130,92 +124,170 @@ The root cause is not a lack of standards. It is a bottleneck: senior engineers 
 
 ## 3. What It Is
 
-An AI-powered senior engineer that lives inside your GitHub repository. The moment a developer pushes code, a pipeline of specialised agents analyses the change, challenges its own findings, and surfaces a structured review — ready for human sign-off — before the developer has closed their laptop.
+An AI-powered senior engineer that lives inside your GitHub repository. The moment a developer pushes code, a pipeline of specialised agents analyses the change and surfaces a structured review — ready for human sign-off — before the developer has closed their laptop.
 
-Instead of one model doing everything, the system runs a coordinated pipeline of agents, each with a specific responsibility. They work in parallel, challenge each other's findings, and only surface a comment when they have collectively agreed something is worth flagging.
+Instead of one model doing everything, the system runs a coordinated pipeline of agents, each with a specific responsibility. They work in parallel and only surface a comment when confidence thresholds are met.
 
 ### Key metrics
 
 | Metric | Target |
 |---|---|
 | Time from push to findings ready | < 60 seconds |
-| False positive rate (after critic) | < 15% |
-| Finding acceptance rate (human dashboard) | > 70% |
 | Supported languages | All (tree-sitter for 100+ languages, line-based fallback for the rest) |
-| Agents in the pipeline | 5 (ingestion, bug, security, pattern, critic) |
+| Agents in the pipeline | 4 (ingestion, bug, security, pattern) |
 | Trust levels | 3 |
 
 ---
 
-## 4. Full System Flow
+## 4. Current System Structure
+
+```
+backend/
+  main.py                          # FastAPI app — webhook receiver, pipeline orchestrator
+  requirements.txt
+  app/
+    github_client.py               # GitHub App JWT auth, installation token, PR diff fetch
+    repo_manager.py                # Shallow clone repo at PR head SHA → /tmp/repos/
+    agents/
+      router.py                    # Routes findings: auto / queue / digest by confidence + severity
+      ingestion/
+        __init__.py                # Exposes run_ingestion()
+        agent.py                   # Full vs incremental ingest orchestrator
+        walker.py                  # File walk, binary detection, skip list filtering
+        parser.py                  # tree-sitter chunking + line-window fallback
+        embedder.py                # Batched OpenAI embedding with retry
+        store.py                   # ChromaDB collection management, upsert, delete
+        diff_parser.py             # Parses unified diff → modified + deleted file paths
+      specialist/
+        graph.py                   # LangGraph fan-out: runs bug/security/pattern in parallel
+        context.py                 # ChromaDB retrieval helper for agents
+        diff_utils.py              # Diff hunk parsing for agent input
+        bug/
+          agent.py                 # Bug detection agent (GPT-4o with function calling)
+          prompts.py
+        security/
+          agent.py                 # Security agent — OWASP Top 10 patterns (GPT-4o)
+          prompts.py
+        pattern/
+          agent.py                 # Pattern agent — codebase convention checks (GPT-4o)
+          prompts.py
+      pr_writer/
+        agent.py                   # Posts inline GitHub review comments, falls back to body comment
+        formatter.py               # Formats findings as structured markdown comments
+        suggester.py               # GPT-4o generates corrected code for suggestion blocks
+        education.py               # OWASP category → "why this matters" + reference link
+    api/
+      findings.py                  # GET /findings, GET /stats, PATCH /findings/:id
+    db/
+      connection.py                # SQLAlchemy async session factory
+      models.py                    # PRReview + FindingRow ORM models
+      findings_repo.py             # All DB operations: save, query, resolve, dismiss stale
+    models/
+      chunks.py                    # Chunk dataclass + IngestionResult Pydantic model
+      findings.py                  # Finding Pydantic model, finding_hash(), dedup logic
+      ingestion_config.py          # IngestionConfig (thresholds, skip dirs, batch size)
+
+frontend/
+  app/
+    layout.tsx                     # Root layout with Navbar
+    page.tsx                       # Findings dashboard — status tabs, stats bar, findings table
+    reviews/page.tsx               # PR review history list
+  components/
+    FindingsTable.tsx              # Severity-coloured table rows, route badges, drawer trigger
+    FindingDrawer.tsx              # Sheet with full finding detail, GitHub links, approve/dismiss
+    StatsBar.tsx                   # 4 metric cards (total / pending / approved / dismissed)
+    Navbar.tsx                     # Dark nav with active route highlight
+    SeverityBadge.tsx              # Coloured severity pill component
+    ui/                            # shadcn/ui primitives (badge, button, card, sheet, table, tabs)
+
+docs/
+  code_review_system_v1.0.0.md    # This document
+  design/
+    repo_cloning.md
+    ingestion_agent.md
+    chromadb_storage.md
+```
+
+### Environment variables (`.env` in `backend/`)
+
+| Variable | Purpose |
+|---|---|
+| `GITHUB_APP_ID` | GitHub App identifier |
+| `GITHUB_WEBHOOK_SECRET` | HMAC secret for validating webhook signatures |
+| `GITHUB_PRIVATE_KEY_PATH` | Path to GitHub App private key PEM file |
+| `OPENAI_API_KEY` | OpenAI API key — used for embeddings (`text-embedding-3-small`) and agent reasoning (`gpt-4o`) |
+| `DATABASE_URL` | PostgreSQL connection string (asyncpg driver) |
+
+---
+
+## 5. Full System Flow
 
 ```
 GitHub Push / PR Open
         │
         ▼
 ┌─────────────────────────────────┐
-│   PR Context Ingestion   [NEW]  │  pulls PR description, linked ticket,
-│                                 │  commit messages — captures intent
+│      FastAPI Receiver           │  validates HMAC-SHA256 signature,
+│                                 │  filters noise events (review comments,
+│                                 │  check runs, etc.) before processing
 └────────────────┬────────────────┘
                  │
                  ▼
 ┌─────────────────────────────────┐
-│      FastAPI Receiver           │  catches webhook, validates signature
-└────────────────┬────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────┐
-│      Ingestion Agent            │  clones repo, chunks by function/class,
+│      Ingestion Agent            │  clones repo at head SHA,
+│                                 │  chunks by function/class via tree-sitter,
 │                                 │  embeds into ChromaDB vector store
+│                                 │  (full on first PR, incremental thereafter)
 └────────────────┬────────────────┘
                  │
         ┌────────┴────────┐
         │   parallel      │
         │   fan-out       │
+        │  (LangGraph)    │
         │                 │
         ▼                 ▼                 ▼
 ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
 │ Bug Detection│  │   Security   │  │   Pattern    │
 │    Agent     │  │    Agent     │  │    Agent     │
 │              │  │              │  │              │
-│ null refs,   │  │ OWASP,       │  │ compares     │
+│ null refs,   │  │ OWASP Top10, │  │ compares     │
 │ logic errors,│  │ secrets,     │  │ diff against │
-│ missed reqs  │  │ auth gaps    │  │ full codebase│
+│ missed logic │  │ auth gaps    │  │ codebase     │
+│ (GPT-4o)     │  │ (GPT-4o)     │  │ (GPT-4o)     │
 └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
        │                 │                  │
        └─────────────────┴──────────────────┘
                          │
                          ▼
         ┌────────────────────────────────┐
-        │         Critic Agent           │
+        │       Deduplication            │
         │                                │
-        │  challenges every finding      │◄─── PR intent context [NEW]
-        │  retrieves codebase context    │
-        │  assigns confidence score      │
-        │  drops false positives         │
+        │  two-pass: by (file, line,     │
+        │  category) then by (file, line)│
+        │  keeps highest-confidence hit  │
         └───────────────┬────────────────┘
                         │
                         ▼
         ┌────────────────────────────────┐
-        │      Severity Router   [NEW]   │
+        │       Severity Router          │
         │                                │
         │  routes by confidence score    │
         │  and finding severity          │
         └──────┬──────────┬──────────────┘
                │          │                    │
-    confidence │    confidence           confidence
-      > 95%    │     70–95%               < 70%
-    + High sev │   + Medium sev         + Low sev
+    conf≥95%   │   conf≥70%              conf<70%
+    + high sev │   or high sev           + low/med
                │          │                    │
                ▼          ▼                    ▼
     ┌──────────────┐  ┌───────────────┐  ┌───────────────┐
-    │ Auto-post to │  │    Human      │  │    Weekly     │
-    │   GitHub     │  │   Approval    │  │    Digest     │
-    │              │  │   Dashboard   │  │               │
-    │ + page senior│  │ (Next.js)     │  │  batched,     │
-    │   engineer   │  │               │  │  low priority │
-    │  [Level 3]   │  │  [Level 1/2]  │  │               │
+    │  Auto-post   │  │    Human      │  │    Weekly     │
+    │  to GitHub   │  │   Approval    │  │    Digest     │
+    │  immediately │  │   Dashboard   │  │               │
+    │              │  │  (Next.js 16) │  │  batched,     │
+    │  [Level 3]   │  │  [Level 1/2]  │  │  low priority │
     └──────┬───────┘  └──────┬────────┘  └───────────────┘
+           │                 │
+           │          human approve
            │                 │
            └────────┬────────┘
                     │
@@ -223,167 +295,113 @@ GitHub Push / PR Open
         ┌─────────────────────────────────────┐
         │          PR Writer Agent            │
         │                                     │
+        │  generates code fix via GPT-4o      │
         │  formats finding as inline comment  │
         │  attaches to exact line number      │
-        │  includes suggested code diff       │
+        │  includes ````suggestion```` block  │
         └──────────────────┬──────────────────┘
                            │
                            ▼
         ┌─────────────────────────────────────┐
-        │       Educational Layer    [NEW]    │
+        │         Educational Layer           │
         │                                     │
-        │  adds why the problem matters       │
-        │  links to OWASP / standards         │
-        │  teaches, not just corrects         │
+        │  OWASP category → impact statement  │
+        │  links to OWASP Top 10 reference    │
+        │  severity fallback for non-OWASP    │
         └──────────────────┬──────────────────┘
                            │
                            ▼
         ┌─────────────────────────────────────┐
         │            GitHub API               │
         │                                     │
-        │  posts inline PR comment            │
-        │  developer receives email notif     │
+        │  POST /pulls/:id/reviews            │
+        │  inline comment on exact diff line  │
+        │  falls back to PR body comment      │
         └─────────────────────────────────────┘
 ```
 
+### Stale finding cleanup
+
+When a new commit is pushed to an open PR, all pending findings from previous commits are automatically dismissed (`system:superseded`) so the dashboard only shows findings relevant to the current head. When a PR is closed, all remaining pending findings are dismissed.
+
 ---
 
-## 5. How It Works — Step by Step
+## 6. How It Works — Step by Step
 
 ### Step 1 — A push triggers the pipeline
 
-When code is pushed to GitHub, a webhook fires instantly. The system receives the event, validates it, and begins processing. From this moment, the clock is running.
+When code is pushed to GitHub, a webhook fires instantly. The system receives the event, validates the HMAC-SHA256 signature, and filters noise events (check runs, review comments, status events) before processing. From this moment, the clock is running.
 
-### Step 2 — PR intent is captured `[NEW]`
+### Step 2 — The codebase is made searchable
 
-Before analysing a single line of code, the system reads what the developer was trying to do. It pulls the pull request description, the linked ticket from Jira or GitHub Issues, and the commit messages on the branch. This context is stored and fed into the critic agent later to distinguish intentional decisions from mistakes.
+A dedicated ingestion agent clones the repository at the PR head SHA and breaks every file into meaningful chunks — individual functions, classes, and methods — rather than arbitrary slices of text. Each chunk is converted into a vector and stored in ChromaDB.
 
-The practical effect is a new class of finding. If a ticket specifies that a refund endpoint should only process amounts under fifty dollars, and the code has no such limit, the critic can flag this as a missed requirement — something no code pattern matcher would ever catch.
+On the first PR for a repo, the full codebase is ingested. On every subsequent push, only the changed files are updated and deleted files are purged. One ChromaDB collection per repo (`{owner}__{repo_name}`), stored at `/tmp/chromadb/`.
 
-### Step 3 — The codebase is made searchable
-
-A dedicated ingestion agent clones the repository and breaks every file into meaningful chunks — individual functions, classes, and methods — rather than arbitrary slices of text. Each chunk is converted into a numerical representation and stored in ChromaDB, a vector database.
-
-On the first run, the full codebase is ingested. On every subsequent push, only the changed files are updated. The process is fast and inexpensive.
-
-#### Step 3a — Walk the folder
-
-The agent scans the cloned repository at `/tmp/repos/{owner}-{repo}-{sha}` and walks all files. Binary files and files over a configurable size threshold (e.g. minified JS bundles, `package-lock.json`) are skipped.
-
-```
-/tmp/repos/acme-myrepo-a3f92c1/
-    src/
-        auth.py
-        payments.ts
-        utils.go
-    models/
-        user.java
-        order.rs
-    config/
-        settings.yaml   ← line-based fallback
-```
-
-#### Step 3b — Parse into chunks
-
-Files are not split by character count. tree-sitter is used as the primary parser for all languages it supports (Python, Java, TypeScript, Go, Rust, C, C++, Ruby, and 100+ more), producing complete, meaningful units. For any file type tree-sitter does not support, a line-based window fallback is used.
+#### Parsing strategy
 
 | Approach | Result |
 |---|---|
-| Naive — split by character count | Chunks split mid-function. Meaningless in isolation. |
-| tree-sitter (all supported languages) | Each chunk is a complete function, class, or method. |
+| tree-sitter (all supported languages) | Each chunk is a complete function, class, or method |
 | Line-based fallback (unsupported types) | Fixed-size line windows — used for config, YAML, etc. |
 
-A chunk boundary never falls in the middle of a function for any tree-sitter-supported language. When an agent retrieves context about payment processing, it gets a whole function — not fragments of two different ones.
+#### Embedding
 
-#### Step 3c — Embed each chunk
+Each chunk is embedded with OpenAI `text-embedding-3-small` (1536 dimensions) and stored with metadata: `{file, line_start, line_end, symbol, language, sha}`.
 
-Each chunk is converted into a vector — a list of numbers that captures its semantic meaning — using OpenAI `text-embedding-3-small`:
+### Step 3 — Three specialist agents run in parallel
 
-```
-"def validate_user(email)..." → [0.23, -0.81, 0.45, 0.12, ...]
-                                  (1536 numbers)
-```
-
-Two functions that do similar things produce similar vectors, even if the code looks completely different. This is what enables search by meaning rather than by keyword.
-
-#### Step 3d — Store in ChromaDB
-
-ChromaDB stores three things per chunk:
-
-| Field | Value |
-|---|---|
-| `vector` | `[0.23, -0.81, 0.45, ...]` — used for similarity search |
-| `document` | `"def validate_user(..."` — the actual source code |
-| `metadata` | `{file: "auth.py", line: 12, type: "function"}` |
-
-Later, when an agent needs context, it queries ChromaDB with a natural language or code fragment. ChromaDB converts the query to a vector, finds the closest stored vectors, and returns the matching code chunks. This is RAG — Retrieval Augmented Generation.
-
-**Why this matters for false positive reduction:**
-
-Without ChromaDB:
-```
-Bug agent sees: amount has no upper limit check → flags as bug
-```
-
-With ChromaDB:
-```
-Bug agent sees: amount has no upper limit check
-Bug agent queries ChromaDB: find validators for payment amount
-ChromaDB returns: validate_payment_limit() in payments/validators.py
-Bug agent concludes: validation already exists upstream → not a bug
-```
-
-This context retrieval is the mechanism the critic agent uses to drop false positives before any finding reaches a human.
-
-### Step 4 — Three specialist agents run in parallel
-
-With the codebase searchable and PR intent captured, three agents run simultaneously.
+With the codebase searchable, three agents run simultaneously via LangGraph fan-out. Each agent receives the PR diff and can query ChromaDB for surrounding context before forming findings.
 
 | Agent | What it looks for |
 |---|---|
-| **Bug detection** | Null references, unhandled exceptions, broken logic, missing validations, and cases where the code does not match what the PR description says it should do |
-| **Security** | Hardcoded secrets, missing authentication checks, SQL injection risks, and OWASP Top 10 patterns |
-| **Pattern** | Inconsistencies between new code and the established conventions of the rest of the codebase |
+| **Bug detection** | Null references, unhandled exceptions, broken logic, missing validations |
+| **Security** | Hardcoded secrets, missing authentication checks, SQL injection risks, OWASP Top 10 patterns |
+| **Pattern** | Inconsistencies between new code and the established conventions of the codebase |
 
-### Step 5 — The critic agent challenges every finding
+Each agent uses GPT-4o with structured function calling and returns typed Pydantic findings with a `confidence` score (0.0–1.0).
 
-This is the most important step in the pipeline.
+### Step 4 — Deduplication
 
-The three specialist agents are tuned to find problems. They will flag many things that look suspicious in isolation but are perfectly safe in context. Without a filtering step, the system would post noisy, inaccurate comments that erode developer trust within days.
+Before routing, findings are deduplicated in two passes:
 
-The critic agent receives every finding and asks a single hard question: is this actually a real problem, or does it just look like one? It retrieves surrounding context from the vector database, checks for upstream validators or middleware that might make the finding irrelevant, compares against the PR intent captured in Step 2, and assigns a confidence score to each finding. Anything below the threshold is dropped entirely.
+1. **By `(file, line_start, category)`** — if the same category is flagged on the same line by multiple agents, keep the highest-confidence one.
+2. **By `(file, line_start)`** — if multiple categories point to the same line, keep the highest-confidence one overall.
 
-### Step 6 — Findings are routed by severity `[NEW]`
+Each finding is identified by a `finding_hash` — SHA256 of `{file}:{line_start}:{category}` — used as a composite unique key per review in the database.
 
-Not every finding deserves the same response. The severity router reads the critic's confidence score and the finding's severity level, then sends each finding down one of three paths.
+### Step 5 — Findings are routed by severity
+
+Not every finding deserves the same response. The severity router reads the confidence score and severity level, then sends each finding down one of three paths.
 
 | Trigger | Path | What happens |
 |---|---|---|
-| Confidence > 95% + High severity | Auto-post | Posted to GitHub immediately. Senior engineer is paged. A hardcoded production secret does not wait overnight. |
-| Confidence 70–95% + Medium severity | Human dashboard | Sent to the approval dashboard. A senior engineer reviews and approves before anything reaches GitHub. |
-| Confidence < 70% + Low severity | Weekly digest | Batched into a weekly email. Too uncertain to post, too useful to discard. |
+| `confidence ≥ 0.95` + `severity == high` | `auto` | Posted to GitHub immediately as inline PR comment |
+| `confidence ≥ 0.70` OR `severity == high` | `queue` | Sent to the human approval dashboard |
+| Everything else | `digest` | Batched into weekly digest email |
 
-### Step 7 — A human approves findings
+### Step 6 — A human reviews queued findings
 
-For medium-severity findings, the senior engineer opens the approval dashboard and sees a clean list of pre-filtered findings. Each one shows the file and line number, an explanation of the problem, the confidence score, and a suggested code fix.
+For queued findings, the engineer opens the Next.js approval dashboard and sees a filterable table of pre-routed findings. Each finding shows: severity, category, file and line number, full description, suggestion, confidence score, route badge, and a link to the exact line on GitHub.
 
-The engineer approves or dismisses each finding. Nothing reaches GitHub until they click approve. This is the core trust principle: AI recommends, humans decide.
+Clicking a row opens a detail drawer with the full finding and approve/dismiss buttons. Nothing reaches GitHub until the engineer clicks approve.
 
-### Step 8 — Structured comments are posted to GitHub `[NEW]`
+### Step 7 — Structured comments are posted to GitHub
 
-Once approved, the PR writer agent formats the finding as a proper inline GitHub review comment attached to the exact line of code. The educational layer then enriches every comment with three things:
+Once approved (or immediately for `auto` findings), the PR writer agent:
 
-- **What** the problem is
-- **Why** it matters in concrete terms — not just that it is bad practice, but the specific risk it introduces
-- **A reference link** to the relevant standard or documentation
+1. Extracts the flagged code from the diff hunk
+2. Calls GPT-4o to generate a corrected replacement (one-click GitHub suggestion block)
+3. Formats the comment: severity label, category, description, suggestion, fix block
+4. Adds educational context from the OWASP mapping or severity fallback
+5. Posts via `POST /repos/{owner}/{repo}/pulls/{pr}/reviews` with `event: COMMENT`
+6. Falls back to a PR body comment if inline posting returns 422 (e.g. line not in diff)
 
-A comment about a hardcoded API key does not just say "use an environment variable." It explains that if the repository becomes public or logs are accessed by an attacker, the key can be used to initiate arbitrary charges. It links to the relevant OWASP standard.
-
-GitHub sends a standard notification email to the developer. From their perspective, they received a specific, actionable review with a one-click fix suggestion — faster than any human review cycle.
+A comment about a hardcoded API key explains that it is permanently exposed in git history even after deletion, and links to OWASP A02:2021 — Cryptographic Failures.
 
 ---
 
-## 6. Trust Model
+## 7. Trust Model
 
 The biggest mistake in AI agent design is building something that acts autonomously on consequential decisions. Code review gatekeeps what goes into production. This system is built around three explicit trust levels.
 
@@ -391,68 +409,72 @@ The biggest mistake in AI agent design is building something that acts autonomou
 |---|---|---|---|
 | **Level 1** | Read only | Agent reads code and posts findings as a comment on an existing human-opened PR. Never opens anything itself. | ✅ Yes |
 | **Level 2** | Draft and approve | Agent prepares a full review but holds it in the dashboard waiting for human approval before touching GitHub. | No |
-| **Level 3** | Auto for narrow cases | Agent acts automatically, but only for high-confidence findings in an explicitly defined category. Teams opt in deliberately. | No |
+| **Level 3** | Auto for narrow cases | Agent acts automatically, but only for high-confidence findings in an explicitly defined category (conf ≥ 95% + high severity). | Opt-in |
 
-> **Default: Level 1.** Teams must explicitly opt into Level 2 or Level 3 for specific finding categories. Auto-acting on consequential code changes without a documented opt-in is not permitted.
-
----
-
-## 7. Design Additions
-
-These capabilities extend the core pipeline beyond simple code pattern matching. Each is marked `[NEW]` in the system flow diagram above.
-
-### PR intent awareness `[NEW]`
-
-The system ingests the pull request description, the linked ticket, and the commit message trail before analysing any code. This gives every downstream agent access to what the developer was trying to accomplish, not just what they wrote.
-
-This enables a new class of finding: missed requirements. Business logic errors — things no code pattern matcher would ever catch — become detectable.
-
-**Why it matters:** A security agent can tell you a validation is missing. Only an agent that has read the ticket can tell you the validation was explicitly required by the business and was missed entirely.
-
-### Severity-based routing `[NEW]`
-
-Instead of sending every finding to the same human approval queue, the system routes each finding based on its confidence score and severity level. Critical, high-confidence findings post immediately. Uncertain, low-severity findings are batched for a weekly digest. Only medium-confidence findings go to the dashboard for human review.
-
-**Why it matters:** A hardcoded production API key should not wait until morning for someone to open the dashboard. Routing by severity ensures the system responds proportionally to actual risk.
-
-### Educational context in every comment `[NEW]`
-
-Every comment posted to GitHub includes what the problem is, why it matters in concrete terms, and a reference to the relevant standard. This turns the tool from a linter into something that makes junior developers measurably better over time.
-
-**Why it matters:** Telling a developer to "use an environment variable" teaches nothing. Explaining that a leaked key can be used to initiate arbitrary charges on a live Stripe account teaches them to think about risk — and they will not make the same mistake again.
+> **Default: Level 1.** Teams must explicitly opt into Level 3 for specific finding categories. Auto-acting on consequential code changes without a documented opt-in is not permitted.
 
 ---
 
-## 8. What It Solves
+## 8. Design Decisions
+
+### No critic agent
+
+The original design included a critic agent that challenged every specialist finding before routing. It was removed after it rejected 87.5% of findings — including real, confirmed bugs — because it lacked the semantic depth to distinguish true positives from false positives.
+
+The current approach routes directly by specialist agent confidence scores. The specialist agents already query ChromaDB for context before forming findings. False positive reduction comes from better specialist prompts and confidence calibration rather than a filtering layer.
+
+**Trade-off:** More false positives may reach the dashboard. The human approval step at the queue level absorbs this. Auto-posting (Level 3) requires high confidence + high severity, which limits blast radius.
+
+### Severity-based routing
+
+Instead of a single approval queue, findings are split at routing time. This ensures critical findings (hardcoded secrets, auth bypass) reach GitHub immediately without waiting for a human review cycle, while uncertain findings are batched rather than discarded.
+
+### Educational context in every comment
+
+Every comment posted to GitHub includes the problem, why it matters in concrete terms, and an OWASP reference link where applicable. 14 OWASP categories are mapped. Non-OWASP findings use a severity-based fallback.
+
+### GPT-4o suggestion blocks
+
+For each inline comment, GPT-4o generates corrected replacement code. This is presented as a GitHub `suggestion` block — the developer sees a diff and can apply the fix with one click. The suggestion is skipped if the flagged code cannot be extracted from the diff or if GPT-4o returns something implausibly long (> 4x the original).
+
+### Stale finding cleanup
+
+New commits to an open PR automatically dismiss all pending findings from previous commits. Closed PRs dismiss all remaining pending findings. This keeps the dashboard clean and prevents reviewers from approving findings that are no longer relevant.
+
+---
+
+## 9. What It Solves
 
 | Without the system | With the system |
 |---|---|
 | PR sits unreviewed for 1–2 days | Findings ready within 60 seconds |
 | Senior engineers spend hours on mechanical checks | Senior engineers spend minutes approving pre-filtered findings |
-| Noisy AI tools erode developer trust | Critic agent filters false positives before humans ever see them |
-| Junior developers receive feedback too late to learn | Educational context in every comment builds developer skill over time |
-| Critical security bugs wait overnight for review | High-confidence security findings post immediately and page the engineer |
-| Agents have no understanding of business requirements | PR intent ingestion enables detection of missed requirements |
+| Noisy AI tools erode developer trust | Confidence thresholds and deduplication reduce noise before humans see findings |
+| Junior developers receive feedback too late to learn | Educational context in every comment links to OWASP standards and explains real impact |
+| Critical security bugs wait overnight for review | High-confidence security findings post immediately |
+| Stale findings accumulate after force-pushes | Superseded findings auto-dismissed on each new commit |
 
 ---
 
-## 9. Known Limitations
+## 10. Known Limitations
 
 The system covers roughly 60–70% of the judgments a senior engineer makes during code review. The remaining 30–40% require human expertise and always will.
 
 | Limitation | Reason | Mitigation |
 |---|---|---|
-| Cannot reason about unwritten context | Decisions made verbally in meetings live nowhere in the codebase | Teams can document decisions as ADRs and ingest them |
-| Cannot make strategic architectural calls | Requires understanding of product direction, not just code patterns | Human approval step ensures engineers stay in the loop |
+| Shallow pattern matching can produce false positives | GPT-4o sees diff context only, not full program semantics. No control flow or data flow analysis. | Human approval step at the queue level. Confidence threshold for auto-posting. |
+| Line number drift in reported findings | Agent counts diff header lines as code lines when mapping findings back to file positions. | Known issue; mitigated by linking to GitHub file view rather than relying solely on line numbers. |
+| Overconfident scores for pattern hits | Agents return high confidence for syntactic matches even when the semantic claim is wrong. | Do not auto-post without both high confidence AND high severity. |
 | Unsupported file types use line-based chunking | tree-sitter does not cover every file format | Line-based fallback preserves context; quality is lower than AST-level chunks |
 | Large monorepos may be slow on first ingest | Full codebase embedding is a one-time expensive operation | Scoped ingestion per service can reduce initial cost |
-| Agent confidence scores are not perfectly calibrated | LLM outputs are probabilistic | LangSmith tracing allows ongoing recalibration |
+| Cannot reason about unwritten context | Decisions made verbally in meetings live nowhere in the codebase | Teams can document decisions as ADRs and ingest them (future) |
+| Cannot make strategic architectural calls | Requires understanding of product direction, not just code patterns | Human approval step ensures engineers stay in the loop |
 
 > **The goal is not to replace senior engineers.** It is to ensure that when they do show up, they are spending their time on the problems that genuinely need them.
 
 ---
 
-## 10. Technology Stack
+## 11. Technology Stack
 
 | Layer | Tool | Purpose |
 |---|---|---|
@@ -460,87 +482,85 @@ The system covers roughly 60–70% of the judgments a senior engineer makes duri
 | Async server | Uvicorn | ASGI server for FastAPI |
 | HTTP client | httpx | Async calls to GitHub API |
 | Repo cloning | gitpython | Clones repositories programmatically |
-| Code parsing | tree-sitter | AST-level chunking for 100+ languages (Python, Java, TS, Go, Rust, C, C++, Ruby, and more) |
+| Code parsing | tree-sitter | AST-level chunking for 100+ languages (Python, Java, TS, Go, Rust, C, C++, and more) |
 | Code parsing fallback | line-based windowing | Fixed-size line windows for file types not supported by tree-sitter |
-| Embeddings | OpenAI text-embedding-3-small | Converts code chunks to vectors |
+| Embeddings | OpenAI text-embedding-3-small | Converts code chunks to vectors (1536 dimensions) |
 | Vector database | ChromaDB | Stores and retrieves embedded code chunks by semantic similarity |
-| Agent orchestration | LangGraph | Manages parallel fan-out and sequential pipeline |
-| LLM provider (primary) | Claude (Anthropic) | Agent reasoning and generation |
-| LLM provider (alternative) | OpenAI GPT-4o | Drop-in alternative |
-| Observability | LangSmith | Traces every agent decision for debugging |
-| Structured outputs | Pydantic | Typed outputs from each agent |
-| Human dashboard | Next.js 14 | Approval interface with audit trail |
-| UI components | shadcn/ui | Dashboard component library |
-| Data fetching | TanStack Query | Fetches and caches findings from FastAPI |
-| Relational database | PostgreSQL | Stores findings, approvals, audit trail |
-| Job queue | Redis | Queues webhook jobs, manages workflow state |
-| Containerisation | Docker + Docker Compose | Packages backend and worker |
-| Cloud deployment | Railway or Fly.io | Hosts backend |
-| Frontend deployment | Vercel | Hosts Next.js dashboard |
-| CI/CD | GitHub Actions | Automated testing and deployment pipeline |
+| Agent orchestration | LangGraph | Manages parallel fan-out for specialist agents |
+| LLM provider | OpenAI GPT-4o | Agent reasoning, structured function calling, code fix generation |
+| Structured outputs | Pydantic | Typed outputs from each agent and all API responses |
+| Relational database | PostgreSQL 17 | Stores reviews, findings, status, audit trail |
+| ORM | SQLAlchemy 2.0 async + asyncpg | Async database access |
+| Migrations | Alembic | Schema versioning |
+| Human dashboard | Next.js 16 | Approval interface with findings table and detail drawer |
+| UI components | shadcn/ui + Tailwind CSS | Dashboard component library |
+| Cloud deployment | Railway or Fly.io | Hosts backend (planned) |
+| Frontend deployment | Vercel | Hosts Next.js dashboard (planned) |
 
 ---
 
-## 11. Build Plan
+## 12. Build Plan
 
-| Phase | Weeks | Goal | Complexity |
+| Phase | Weeks | Goal | Status |
 |---|---|---|---|
-| Foundation | 1–2 | GitHub webhook received and logged. GitHub App JWT auth working. PR diff fetched from GitHub API. Repo cloning working. | Low |
-| RAG pipeline | 3–4 | Codebase walked — all files, binaries and oversized files skipped. Files parsed into function/class chunks via tree-sitter (100+ languages) with a line-based fallback for unsupported types. Chunks embedded via OpenAI text-embedding-3-small and stored in ChromaDB with source and metadata. Retrieval function working against real diffs. | Medium |
-| Specialist agents | 5–6 | Bug, security, and pattern agents running in parallel via LangGraph. Structured Pydantic outputs. LangSmith tracing active. | Medium–High |
-| Critic + dashboard | 7–8 | Critic agent filtering false positives. PostgreSQL introduced for findings storage. Human approval dashboard live. Full loop working end to end. | High |
-| PR writer + deployment | 9–10 | Formatted GitHub comments posting. Severity routing live. Educational layer added. Docker + Docker Compose added for deployment. Deployed to Railway and Vercel. | Medium |
+| Foundation | 1–2 | GitHub webhook, HMAC validation, GitHub App JWT auth, PR diff fetch, repo cloning | ✅ Done |
+| RAG pipeline | 3–4 | ChromaDB ingestion: file walk, tree-sitter chunking, OpenAI embedding, upsert/purge | ✅ Done |
+| Specialist agents | 5–6 | Bug/security/pattern agents via LangGraph fan-out, GPT-4o function calling, Pydantic outputs, deduplication, severity router | ✅ Done |
+| PR writer + dashboard | 7–8 | Inline GitHub review comments, suggestion blocks, OWASP educational layer, PostgreSQL findings storage, Next.js approval dashboard, stale finding cleanup | ✅ Done |
+| Weekly digest + deployment | 9–10 | Weekly digest email (APScheduler + SMTP), Docker, Railway + Vercel deploy | 🔄 In progress |
 
 ### Milestones
 
-| Milestone | Description |
-|---|---|
-| M1 — Webhook received | Push a commit to GitHub, see it logged in the terminal |
-| M2 — RAG working | Query the vector store, get back relevant code context for a given diff |
-| M3 — Agents running | Three agents return structured JSON findings against a real GitHub repo |
-| M4 — Full loop | Push code, see findings in dashboard, approve, see GitHub comment posted |
-| M5 — Live and deployed | System is publicly accessible and demonstrable on any GitHub repo in real time |
+| Milestone | Description | Status |
+|---|---|---|
+| M1 — Webhook received | Push a commit to GitHub, see it logged in the terminal | ✅ Done |
+| M2 — RAG working | Query the vector store, get back relevant code context for a given diff | ✅ Done |
+| M3 — Agents running | Three agents return structured JSON findings against a real GitHub repo | ✅ Done |
+| M4 — Full loop | Push code, see findings in dashboard, approve, see GitHub inline comment posted | ✅ Done |
+| M5 — Weekly digest | Digest-route findings emailed weekly via APScheduler cron | 🔄 Planned |
+| M6 — Live and deployed | System is publicly accessible and demonstrable on any GitHub repo in real time | 🔄 Planned |
 
 ---
 
-## 12. Open Questions
+## 13. Open Questions
 
 | # | Question | Owner | Priority | Status |
 |---|---|---|---|---|
-| 1 | Which LLM provider should be the default — Claude or GPT-4o? | Tech lead | High | Open |
-| 2 | Should the weekly digest be an email or a Slack message? | Product owner | Medium | Open |
-| 3 | How should the dashboard handle authentication — OAuth via GitHub or email/password? | Tech lead | High | Open |
-| 4 | What is the confidence threshold for the critic agent — 70% or configurable per team? | Tech lead | Medium | Open |
-| 5 | Should ADR ingestion be in v1 or deferred to v2? | Product owner | Low | Open |
-| 6 | How do we handle monorepos with multiple services — ingest everything or scope to changed service? | Tech lead | Medium | Open |
+| 1 | Weekly digest: email or Slack message? | Product owner | Medium | Email chosen — implementation pending |
+| 2 | How should the dashboard handle authentication — OAuth via GitHub or email/password? | Tech lead | High | Open |
+| 3 | Should ADR ingestion be in v1 or deferred to v2? | Product owner | Low | Deferred to v2 |
+| 4 | How do we handle monorepos with multiple services — ingest everything or scope to changed service? | Tech lead | Medium | Open |
+| 5 | Should confidence thresholds be configurable per team or global? | Tech lead | Medium | Open |
 
 ---
 
-## 13. Glossary
+## 14. Glossary
 
 | Term | Definition |
 |---|---|
 | **ADR** | Architecture Decision Record — a short document capturing a significant architectural decision and its rationale |
 | **Agent** | An AI model with a specific, scoped responsibility in the pipeline |
 | **AST** | Abstract Syntax Tree — a structured representation of source code that captures its logical structure rather than raw text |
-| **Critic agent** | The agent responsible for challenging findings from the three specialist agents, filtering false positives, and assigning confidence scores |
 | **ChromaDB** | An open-source vector database used to store and retrieve embedded code chunks |
+| **Confidence score** | A 0.0–1.0 value assigned by a specialist agent indicating how certain it is that a finding represents a real problem |
+| **Deduplication** | Two-pass process that removes duplicate findings: first by `(file, line, category)`, then by `(file, line)`, keeping the highest-confidence hit |
 | **Embedding** | A numerical representation of a piece of text that captures its semantic meaning |
 | **False positive** | A finding flagged by an agent that is not actually a real problem |
 | **Fan-out** | The step where a single input is sent to multiple agents simultaneously for parallel processing |
+| **finding_hash** | SHA256 of `{file}:{line_start}:{category}` — used as a composite unique identifier per review |
 | **Ingestion agent** | The agent responsible for cloning the repository, chunking files, and storing embeddings in ChromaDB |
 | **LangGraph** | A framework for building multi-agent pipelines with parallel and sequential steps |
-| **LangSmith** | An observability tool that traces and logs every decision made by each agent in the pipeline |
-| **OWASP** | Open Web Application Security Project — the standard reference for web security vulnerabilities |
-| **PR intent** | The developer's stated purpose for a pull request, captured from the PR description, linked ticket, and commit messages |
+| **OWASP** | Open Web Application Security Project — the standard reference for web application security vulnerabilities |
 | **RAG** | Retrieval-Augmented Generation — a technique where relevant context is retrieved from a knowledge base and given to an LLM before it generates a response |
-| **Severity router** | The component that routes each finding to auto-post, human dashboard, or weekly digest based on confidence score and severity level |
+| **Severity router** | The component that routes each finding to `auto`, `queue`, or `digest` based on confidence score and severity level |
+| **Stale finding** | A pending finding from a previous commit to the same PR, automatically dismissed when a new commit is pushed |
+| **Suggestion block** | A GitHub PR comment feature (` ```suggestion ``` `) that shows a diff and allows one-click application of the fix |
 | **Trust level** | A configuration setting that controls how autonomously the system is allowed to act (Level 1 = read only, Level 2 = draft and approve, Level 3 = auto for narrow cases) |
 | **Vector database** | A database that stores numerical representations of data and enables retrieval by semantic similarity rather than exact keyword match |
 | **Webhook** | An HTTP callback that GitHub fires automatically when a specific event occurs, such as a code push |
 
 ---
 
-*Built with Python · LangGraph · FastAPI · Next.js · ChromaDB · LangSmith · Docker · GitHub API*
+*Built with Python · LangGraph · FastAPI · Next.js · ChromaDB · PostgreSQL · OpenAI GPT-4o · GitHub API*
 
-*Document version 1.0.0 — Last updated 06 April 2026 — Classification: Internal*
+*Document version 1.1.0 — Last updated 14 May 2026 — Classification: Internal*
