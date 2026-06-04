@@ -1,5 +1,3 @@
 {
-  "packages": {
-    "git": ""
-  }
+  "aptPkgs": ["git"]
 }
