@@ -207,13 +207,15 @@ cd backend
 uvicorn main:app --reload
 ```
 
-For local development, tunnel webhooks from GitHub to your machine:
+**If running locally**, GitHub cannot reach your machine directly. Use a tunnel:
 
 ```bash
 npx smee-client --url https://smee.io/YOUR_CHANNEL --target http://localhost:8000/webhook
 ```
 
 Set the smee URL as the webhook URL in your GitHub App settings.
+
+**If deployed** (Railway, Render, Fly.io etc.), set the webhook URL in your GitHub App settings to your server's public URL — e.g. `https://your-app.railway.app/webhook`. No tunnel needed.
 
 Open or push to a PR on any installed repo — the pipeline runs automatically in the background.
 
