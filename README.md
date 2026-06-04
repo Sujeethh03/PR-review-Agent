@@ -141,52 +141,90 @@ backend/
 
 ---
 
-## Getting started
+## Self-hosting
 
-### Prerequisites
+### 1. Create a GitHub App
 
-- Python 3.11+
-- A [GitHub App](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/about-creating-github-apps) with **Pull requests: Read & Write** and **Webhooks** permissions
-- OpenAI API key
+Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App** and set:
 
-### Install
+| Field | Value |
+|---|---|
+| GitHub App name | anything (e.g. `my-review-agent`) |
+| Homepage URL | your repo URL |
+| Webhook URL | your server URL + `/webhook` (use [smee.io](https://smee.io) for local dev) |
+| Webhook secret | generate a random string — you'll need it later |
+
+**Repository permissions:**
+
+| Permission | Access |
+|---|---|
+| Contents | Read |
+| Pull requests | Read & Write |
+| Metadata | Read (auto-selected) |
+
+**Subscribe to events:**
+
+- ✅ Pull request
+- ✅ Push
+
+Click **Create GitHub App**, then:
+- Note the **App ID** shown at the top of the settings page
+- Scroll down → **Generate a private key** → download the `.pem` file
+- Install the app on the repos you want it to review
+
+---
+
+### 2. Get an OpenAI API key
+
+Create one at [platform.openai.com/api-keys](https://platform.openai.com/api-keys). The agents use `gpt-4o` for analysis and `text-embedding-3-small` for embeddings.
+
+---
+
+### 3. Install and configure
 
 ```bash
-cd backend
+git clone https://github.com/Sujeethh03/PR-review-Agent.git
+cd PR-review-Agent/backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install --index-url https://pypi.org/simple/ -r requirements.txt
 ```
-
-### Configure
 
 Create `backend/.env`:
 
 ```env
 GITHUB_APP_ID=your_app_id
 GITHUB_WEBHOOK_SECRET=your_webhook_secret
-GITHUB_PRIVATE_KEY_PATH=/path/to/private-key.pem
+GITHUB_PRIVATE_KEY_PATH=/path/to/your-private-key.pem
 OPENAI_API_KEY=sk-...
 ```
 
-### Run
+---
+
+### 4. Run
 
 ```bash
+cd backend
 uvicorn main:app --reload
 ```
 
-### Receive webhooks locally
+For local development, tunnel webhooks from GitHub to your machine:
 
 ```bash
 npx smee-client --url https://smee.io/YOUR_CHANNEL --target http://localhost:8000/webhook
 ```
 
-Open or push to a PR on any repo where the GitHub App is installed — the pipeline runs automatically in the background.
+Set the smee URL as the webhook URL in your GitHub App settings.
 
-### Test agents without a live PR
+Open or push to a PR on any installed repo — the pipeline runs automatically in the background.
+
+---
+
+### 5. Test without a live PR
 
 ```bash
-python test_specialist.py   # runs all three agents on sample diffs with deliberate bugs
-python test_ingestion.py    # tests the ChromaDB ingestion pipeline in isolation
+cd backend
+python test_specialist.py   # runs all three agents on deliberate bugs
+python test_ingestion.py    # tests ChromaDB ingestion in isolation
 ```
 
 ---
