@@ -1,2 +1,0 @@
-[phases.install]
-cmds = ["pip install --index-url https://pypi.org/simple/ -r backend/requirements.txt"]
