@@ -1,11 +1,5 @@
-import hashlib
 from typing import Literal
 from pydantic import BaseModel
-
-
-def finding_hash(finding: "Finding") -> str:
-    key = f"{finding.file}:{finding.line_start}:{finding.category}"
-    return hashlib.sha256(key.encode()).hexdigest()
 
 
 class Finding(BaseModel):

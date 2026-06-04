@@ -1,49 +1,114 @@
+import asyncio
 import hmac
 import hashlib
 import json
 import os
+import shutil
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from app.github_client import get_pr_diff
 from app.repo_manager import clone_repo
 from app.agents.ingestion import run_ingestion
 from app.agents.specialist import run_specialist_agents
-from app.agents.router import route_finding
 from app.agents.pr_writer import run_pr_writer
-from app.db.findings_repo import save_review, save_findings, dismiss_stale_findings
-from app.models.findings import finding_hash
-from app.api.findings import router as findings_router
 
 load_dotenv(override=True)
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(findings_router)
-
 WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
 if not WEBHOOK_SECRET:
     raise RuntimeError("GITHUB_WEBHOOK_SECRET is not set")
+
+CONFIDENCE_THRESHOLD = 0.70
 
 
 def verify_signature(payload_body: bytes, signature_header: str) -> bool:
     if not signature_header:
         return False
-
     expected_signature = "sha256=" + hmac.new(
         WEBHOOK_SECRET.encode("utf-8"),
         payload_body,
-        hashlib.sha256
+        hashlib.sha256,
     ).hexdigest()
-
     return hmac.compare_digest(expected_signature, signature_header)
+
+
+async def _run_pipeline(
+    owner: str,
+    repo_name: str,
+    pr_number: int,
+    installation_id: int,
+    head_sha: str,
+) -> None:
+    print(f"\n{'='*50}")
+    print(f"Pipeline starting — PR #{pr_number} ({owner}/{repo_name} @ {head_sha[:7]})")
+    repo_path = None
+    try:
+        diff = await get_pr_diff(installation_id, owner, repo_name, pr_number)
+        print(f"Diff fetched: {len(diff)} characters")
+
+        repo_path = await clone_repo(installation_id, owner, repo_name, head_sha)
+        print(f"Repo cloned: {repo_path}")
+
+        ingestion_result = await run_ingestion(
+            diff=diff,
+            repo_path=repo_path,
+            owner=owner,
+            repo_name=repo_name,
+            head_sha=head_sha,
+        )
+        print(
+            f"Ingestion: {ingestion_result.chunks_stored} chunks "
+            f"({ingestion_result.mode}) → '{ingestion_result.collection_name}'"
+        )
+
+    finally:
+        if repo_path:
+            shutil.rmtree(repo_path, ignore_errors=True)
+            print(f"Cleaned up {repo_path}")
+
+    specialist_result = await run_specialist_agents(
+        diff=diff,
+        collection_name=ingestion_result.collection_name,
+        owner=owner,
+        repo_name=repo_name,
+    )
+    all_findings = specialist_result.all_findings()
+    print(
+        f"Findings: {len(all_findings)} total "
+        f"({len(specialist_result.bug.findings)} bug, "
+        f"{len(specialist_result.security.findings)} security, "
+        f"{len(specialist_result.pattern.findings)} pattern)"
+    )
+
+    to_post = [f for f in all_findings if f.confidence >= CONFIDENCE_THRESHOLD]
+    dropped = len(all_findings) - len(to_post)
+    print(f"Posting {len(to_post)} finding(s), dropped {dropped} below {CONFIDENCE_THRESHOLD:.0%}")
+
+    if to_post:
+        await run_pr_writer(
+            findings=to_post,
+            installation_id=installation_id,
+            owner=owner,
+            repo_name=repo_name,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            diff=diff,
+        )
+        print(f"Posted to GitHub PR #{pr_number}")
+        for f in to_post:
+            print(f"  [{f.severity.upper()}] {f.file}:{f.line_start} — {f.title} (conf: {f.confidence:.2f})")
+
+    print("=" * 50)
+
+
+async def _safe_run_pipeline(*args, **kwargs) -> None:
+    try:
+        await _run_pipeline(*args, **kwargs)
+    except Exception as e:
+        print(f"Pipeline error: {e}")
+        print("=" * 50)
 
 
 @app.post("/webhook")
@@ -57,13 +122,12 @@ async def webhook(request: Request):
     payload = json.loads(payload_body)
     event_type = request.headers.get("X-GitHub-Event", "unknown")
 
-    print("\n" + "="*50)
-    print(f"Event received: {event_type}")
-
-    if event_type in ("security_advisory", "github_app_authorization",
-                      "check_suite", "check_run", "status",
-                      "pull_request_review", "pull_request_review_comment",
-                      "pull_request_review_thread"):
+    if event_type in (
+        "security_advisory", "github_app_authorization",
+        "check_suite", "check_run", "status",
+        "pull_request_review", "pull_request_review_comment",
+        "pull_request_review_thread",
+    ):
         return {"status": "ok", "event": event_type}
 
     if event_type == "push":
@@ -71,116 +135,35 @@ async def webhook(request: Request):
         branch  = payload.get("ref", "").replace("refs/heads/", "")
         pusher  = payload.get("pusher", {}).get("name", "unknown")
         commits = payload.get("commits", [])
-
-        print(f"Repository : {repo}")
-        print(f"Branch     : {branch}")
-        print(f"Pushed by  : {pusher}")
-        print(f"Commits    : {len(commits)}")
-
+        print(f"\n{'='*50}")
+        print(f"Push — {repo} / {branch} by {pusher} ({len(commits)} commit(s))")
         for commit in commits:
-            print(f"  - {commit.get('message', '')} ({commit.get('id', '')[:7]})")
-            print(f"    Files changed: {len(commit.get('modified', []))}")
+            print(f"  {commit.get('id', '')[:7]} {commit.get('message', '').splitlines()[0]}")
+        print("=" * 50)
 
     elif event_type == "pull_request":
-        action = payload.get("action", "unknown")
-        pr     = payload.get("pull_request", {})
-        title  = pr.get("title", "unknown")
-        author = pr.get("user", {}).get("login", "unknown")
-        number = pr.get("number")
-        repo   = payload.get("repository", {}).get("full_name", "unknown")
-        if "/" not in repo:
-            raise HTTPException(status_code=400, detail=f"Unexpected repo format: {repo}")
-        owner, repo_name = repo.split("/", 1)
+        action          = payload.get("action", "unknown")
+        pr              = payload.get("pull_request", {})
+        number          = pr.get("number")
+        repo            = payload.get("repository", {}).get("full_name", "unknown")
         installation_id = payload.get("installation", {}).get("id")
         head_sha        = pr.get("head", {}).get("sha")
 
-        print(f"PR action  : {action}")
-        print(f"PR number  : #{number}")
-        print(f"Title      : {title}")
-        print(f"Author     : {author}")
+        if "/" not in repo:
+            raise HTTPException(status_code=400, detail=f"Unexpected repo format: {repo}")
+        owner, repo_name = repo.split("/", 1)
 
-        if action == "closed":
-            dismissed = await dismiss_stale_findings(owner, repo_name, number)
-            print(f"PR #{number} closed — dismissed {dismissed} pending finding(s)")
+        print(f"\n{'='*50}")
+        print(f"PR #{number} {action} — {pr.get('title', '')} by {pr.get('user', {}).get('login', '')}")
+        print("=" * 50)
 
-        elif action in ("opened", "synchronize") and installation_id and head_sha:
-            try:
-                print(f"Fetching diff for PR #{number}...")
-                diff = await get_pr_diff(installation_id, owner, repo_name, number)
-                print(f"Diff fetched: {len(diff)} characters")
-
-                print(f"Cloning repo at {head_sha[:7]}...")
-                repo_path = await clone_repo(installation_id, owner, repo_name, head_sha)
-                print(f"Repo ready: {repo_path}")
-
-                print("Running ingestion...")
-                ingestion_result = await run_ingestion(
-                    diff=diff,
-                    repo_path=repo_path,
-                    owner=owner,
-                    repo_name=repo_name,
-                    head_sha=head_sha,
-                )
-                print(
-                    f"Ingestion: {ingestion_result.chunks_stored} chunks "
-                    f"({ingestion_result.mode}) → '{ingestion_result.collection_name}'"
-                )
-
-                print("Running specialist agents...")
-                specialist_result = await run_specialist_agents(
-                    diff=diff,
-                    collection_name=ingestion_result.collection_name,
-                    owner=owner,
-                    repo_name=repo_name,
-                )
-                all_findings = specialist_result.all_findings()
-                print(
-                    f"Specialist findings: {len(all_findings)} total "
-                    f"({len(specialist_result.bug.findings)} bug, "
-                    f"{len(specialist_result.security.findings)} security, "
-                    f"{len(specialist_result.pattern.findings)} pattern)"
-                )
-
-                routes = {finding_hash(f): route_finding(f) for f in all_findings}
-
-                review_id = await save_review(
-                    owner, repo_name, number, head_sha,
-                    installation_id, ingestion_result.collection_name,
-                )
-                await save_findings(review_id, all_findings, routes)
-
-                # Dismiss pending findings from previous commits to the same PR
-                dismissed = await dismiss_stale_findings(owner, repo_name, number, exclude_review_id=review_id)
-                if dismissed:
-                    print(f"Dismissed {dismissed} stale finding(s) from previous commits")
-
-                for f in all_findings:
-                    route = routes[finding_hash(f)]
-                    print(f"  [{f.severity.upper()}] [{route.upper()}] {f.file}:{f.line_start} — {f.title} (conf: {f.confidence:.2f})")
-
-                print(f"Saved to DB — review_id: {review_id}")
-
-                auto_findings = [f for f in all_findings if routes[finding_hash(f)] == "auto"]
-                if auto_findings:
-                    print(f"Posting {len(auto_findings)} auto finding(s) to PR #{number}...")
-                    await run_pr_writer(
-                        findings=auto_findings,
-                        installation_id=installation_id,
-                        owner=owner,
-                        repo_name=repo_name,
-                        pr_number=number,
-                        head_sha=head_sha,
-                        diff=diff,
-                    )
-                    print(f"Posted to GitHub PR #{number}")
-
-            except Exception as e:
-                print(f"Pipeline error: {e}")
+        if action in ("opened", "synchronize") and installation_id and head_sha:
+            asyncio.create_task(
+                _safe_run_pipeline(owner, repo_name, number, installation_id, head_sha)
+            )
 
     else:
         print(f"Unhandled event: {event_type}")
-
-    print("="*50 + "\n")
 
     return {"status": "ok", "event": event_type}
 

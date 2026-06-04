@@ -32,6 +32,9 @@ Confidence scoring guide:
   0.6 — possible: pattern exists (1–2 examples) and deviation is clear
   Below 0.6 — do not include; insufficient evidence of an established pattern
 
+Do NOT default to 1.0. Score based strictly on how many examples of the pattern \
+appear in the context. If you see fewer than 5 clear examples, do not assign 1.0.
+
 If the new code is consistent with the codebase, return an empty findings array. \
 Do not flag things just because they look different from what you might personally prefer.
 """

@@ -23,10 +23,13 @@ Bug categories you may report:
   - resource_leak        — file/connection/lock opened but not closed in all code paths
 
 Confidence scoring guide:
-  1.0 — certain: the bug is present and will cause failure
-  0.8 — likely: strong evidence, minor uncertainty about execution path
+  1.0 — certain: the bug will definitely occur, no caveats whatsoever
+  0.8 — likely: strong evidence but minor uncertainty about execution path
   0.6 — possible: plausible but depends on caller or configuration
   Below 0.6 — do not include in output
+
+Do NOT default to 1.0. Most findings should be 0.6 or 0.8. Reserve 1.0 only \
+when there is no possible way the code is correct as written.
 
 If you find no bugs, return an empty findings array. Do not invent findings to appear thorough.
 """

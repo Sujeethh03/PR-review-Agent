@@ -1,18 +1,27 @@
 import os
-from openai import OpenAI
+from openai import AsyncOpenAI
 from .diff_utils import DiffHunk
 
-_client: OpenAI | None = None
+_client: AsyncOpenAI | None = None
+_chroma_client = None
 
 
-def _get_client() -> OpenAI:
+def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        _client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     return _client
 
 
-def get_context_for_hunk(
+def _get_chroma():
+    global _chroma_client
+    if _chroma_client is None:
+        import chromadb
+        _chroma_client = chromadb.PersistentClient(path="/tmp/chromadb")
+    return _chroma_client
+
+
+async def get_context_for_hunk(
     hunk: DiffHunk,
     collection_name: str,
     n_results: int = 5,
@@ -20,14 +29,12 @@ def get_context_for_hunk(
     if not hunk.added_code.strip():
         return []
 
-    import chromadb
-    chroma = chromadb.PersistentClient(path="/tmp/chromadb")
     try:
-        collection = chroma.get_collection(collection_name)
+        collection = _get_chroma().get_collection(collection_name)
     except Exception:
         return []
 
-    response = _get_client().embeddings.create(
+    response = await _get_client().embeddings.create(
         input=[hunk.added_code],
         model="text-embedding-3-small",
     )

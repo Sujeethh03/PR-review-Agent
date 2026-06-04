@@ -36,10 +36,14 @@ Special rules:
 of context. A secret in source code is never acceptable.
 
 Confidence scoring guide:
-  1.0 — certain: the vulnerability is present and exploitable as written
+  1.0 — certain: the vulnerability is present and exploitable as written (hardcoded_secret always gets 1.0)
   0.8 — likely: strong evidence, minor uncertainty about execution context
   0.6 — possible: plausible but depends on caller or framework configuration
   Below 0.6 — do not include in output
+
+Do NOT default to 1.0. Reserve 1.0 only for hardcoded_secret findings and for \
+vulnerabilities that are unambiguously exploitable with no caveats. Most findings \
+should be 0.6 or 0.8.
 
 If you find no vulnerabilities, return an empty findings array. Do not invent findings.
 """

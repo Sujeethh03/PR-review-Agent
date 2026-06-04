@@ -1,139 +1,154 @@
 # PR Review Agent
 
-An AI-powered code review pipeline that analyses GitHub pull requests the moment code is pushed — detecting bugs, security vulnerabilities, and convention violations — and posts structured inline comments with one-click fix suggestions directly on the diff.
-
-Built on a multi-agent architecture where specialist agents work in parallel, findings are routed by confidence and severity, and every comment includes educational context explaining *why* the issue matters.
+An AI pipeline that reviews GitHub pull requests the moment they are opened or updated. Three specialist LLM agents run in parallel to detect bugs, security vulnerabilities, and convention violations, then post structured inline comments with fix suggestions directly on the diff.
 
 ---
 
-## Agent architecture
+## Demo
+
+<!-- Add a screenshot of an actual PR comment here -->
+> Open a PR on a repo with the GitHub App installed. Within seconds, inline comments appear on the flagged lines.
+
+---
+
+## How it works
 
 ```
-                        ┌─────────────────────┐
-                        │   GitHub Webhook     │
-                        │   (FastAPI + HMAC)   │
-                        └──────────┬──────────┘
-                                   │
-                        ┌──────────▼──────────┐
-                        │   Ingestion Agent    │
-                        │                      │
-                        │  Clones repo at PR   │
-                        │  head SHA, chunks    │
-                        │  code via tree-sitter│
-                        │  and stores vectors  │
-                        │  in ChromaDB         │
-                        └──────────┬──────────┘
-                                   │
-              ┌────────────────────┼────────────────────┐
-              │                    │                     │
-   ┌──────────▼────────┐  ┌───────▼────────┐  ┌────────▼───────┐
-   │    Bug Detection   │  │    Security    │  │    Pattern     │
-   │                    │  │                │  │                │
-   │  Null refs, logic  │  │  OWASP Top 10  │  │  Convention    │
-   │  errors, missing   │  │  hardcoded     │  │  consistency   │
-   │  validations       │  │  secrets, auth │  │  vs codebase   │
-   └──────────┬─────────┘  └───────┬────────┘  └────────┬───────┘
-              │                    │                     │
-              └────────────────────┼─────────────────────┘
-                                   │
-                        ┌──────────▼──────────┐
-                        │   Deduplication      │
-                        │                      │
-                        │  Two-pass collapse:  │
-                        │  by category then    │
-                        │  by line — keeps     │
-                        │  highest confidence  │
-                        └──────────┬──────────┘
-                                   │
-                        ┌──────────▼──────────┐
-                        │   Severity Router    │
-                        └──────────┬──────────┘
-                                   │
-            ┌──────────────────────┼──────────────────────┐
-            │                      │                       │
-   ┌────────▼────────┐  ┌──────────▼──────────┐  ┌────────▼───────┐
-   │      auto        │  │       queue          │  │    digest      │
-   │                  │  │                      │  │                │
-   │  conf ≥ 95%      │  │  conf ≥ 70%          │  │  Everything    │
-   │  + high severity │  │  or high severity    │  │  else, batched │
-   │                  │  │                      │  │  for weekly    │
-   │  Posts to GitHub │  │  Human approval      │  │  email         │
-   │  immediately     │  │  dashboard           │  │                │
-   └────────┬─────────┘  └──────────┬──────────┘  └────────────────┘
-            │                       │ (approved)
-            └───────────────────────┘
-                                   │
-                        ┌──────────▼──────────┐
-                        │   PR Writer Agent    │
-                        │                      │
-                        │  GPT-4o generates    │
-                        │  corrected code →    │
-                        │  inline GitHub       │
-                        │  comment with        │
-                        │  suggestion block    │
-                        └──────────┬──────────┘
-                                   │
-                        ┌──────────▼──────────┐
-                        │  Educational Layer   │
-                        │                      │
-                        │  OWASP reference +   │
-                        │  real-world impact   │
-                        │  in every comment    │
-                        └──────────┬──────────┘
-                                   │
-                        ┌──────────▼──────────┐
-                        │     GitHub PR        │
-                        │  Inline comment on   │
-                        │  exact diff line     │
-                        └─────────────────────┘
+GitHub PR opened / new commit pushed
+             │
+             ▼
+     FastAPI webhook receiver
+     (HMAC-SHA256 validated)
+             │
+             │  responds 200 immediately
+             │  pipeline runs in background
+             ▼
+     Fetch PR diff  ──►  Clone repo at head SHA
+                                  │
+                                  ▼
+                        Ingestion Agent
+                        ┌─────────────────────────┐
+                        │ tree-sitter chunking     │
+                        │ OpenAI embeddings        │
+                        │ ChromaDB vector store    │
+                        └────────────┬────────────┘
+                                     │ repo deleted after ingest
+                                     ▼
+              ┌──────────────────────┼──────────────────────┐
+              │   LangGraph fan-out  │  (all three parallel) │
+              ▼                      ▼                       ▼
+      ┌──────────────┐    ┌──────────────────┐    ┌──────────────────┐
+      │  Bug Agent   │    │ Security Agent   │    │  Pattern Agent   │
+      │              │    │                  │    │                  │
+      │ Null refs    │    │ OWASP Top 10     │    │ Compares diff    │
+      │ Logic errors │    │ Hardcoded secrets│    │ against codebase │
+      │ Resource     │    │ Injection flaws  │    │ conventions via  │
+      │ leaks        │    │ Auth gaps        │    │ ChromaDB context │
+      └──────┬───────┘    └────────┬─────────┘    └────────┬─────────┘
+             └────────────────────┼──────────────────────┘
+                                  │
+                                  ▼
+                    Deduplicate findings
+                    (same line, keep highest confidence)
+                                  │
+                    filter: confidence ≥ 0.70
+                                  │
+                                  ▼
+                        PR Writer Agent
+                        ┌─────────────────────────┐
+                        │ Clears stale bot comments│
+                        │ GPT-4o generates fix     │
+                        │ OWASP educational context│
+                        │ GitHub suggestion block  │
+                        └────────────┬────────────┘
+                                     │
+                                     ▼
+                        Inline comment on PR diff
 ```
 
 ---
 
-## What gets posted
+## What a posted comment looks like
 
-Each finding becomes an inline PR comment containing:
+Each finding becomes an inline review comment on the exact flagged line:
 
-- **Severity and category** — `HIGH — hardcoded_secret`, `MEDIUM — missing_validation`
-- **Description** — what the agent found and why it flagged it
-- **Suggested fix** — a GitHub suggestion block the developer can apply with one click
-- **Educational context** — the real-world impact of the issue and a link to the relevant OWASP standard
+```
+🚨 HIGH — Off-by-one error in array indexing
 
-A comment about a hardcoded API key does not just say "use an environment variable." It explains that the key is permanently exposed in git history even after deletion, and links to OWASP A02:2021 — Cryptographic Failures.
+Category: `logic_error`  |  Agent: bug  |  Confidence: 80%
+
+Accessing `arr[arr.length]` will throw an ArrayIndexOutOfBoundsException at runtime.
+Java arrays are zero-indexed; the last valid index is `arr.length - 1`.
+
+Suggestion: change the loop bound to `i < arr.length`
+
+Suggested fix (click Apply suggestion to accept):
+
+  for (int i = 0; i < arr.length; i++) {
 
 ---
 
-## Approval dashboard
+### Why this matters
+This issue can directly lead to incorrect behaviour or a crash if left unaddressed.
+```
 
-Medium-confidence findings land in a Next.js dashboard before touching GitHub. Reviewers see a filterable findings table with severity badges, confidence scores, full descriptions, and a direct link to the flagged line on GitHub.
-
-Approving a finding triggers the PR writer. Dismissing it removes it from the queue. Nothing reaches a developer's PR without a human sign-off — or a confidence score above 95%.
+For security findings, the comment includes the relevant OWASP Top 10 category and a plain-English explanation of the real-world exploit path.
 
 ---
 
 ## Tech stack
 
-| | |
+| Layer | Technology |
 |---|---|
-| **Backend** | Python · FastAPI · LangGraph · SQLAlchemy 2.0 async |
-| **LLM** | OpenAI GPT-4o (agents + code fix generation) |
-| **Embeddings** | OpenAI `text-embedding-3-small` · ChromaDB |
-| **Code parsing** | tree-sitter (100+ languages) |
-| **Database** | PostgreSQL 17 · Alembic |
-| **Dashboard** | Next.js 16 · shadcn/ui · Tailwind CSS |
-| **GitHub integration** | GitHub App · JWT auth · PR Review API |
+| Webhook receiver | Python · FastAPI |
+| Agent orchestration | LangGraph (parallel fan-out) |
+| LLM | OpenAI GPT-4o — analysis + fix generation |
+| Embeddings | OpenAI `text-embedding-3-small` |
+| Vector store | ChromaDB |
+| Code parsing | tree-sitter (Python, JS, TS, Java, Go, Rust, C, C++) |
+| GitHub integration | GitHub App · JWT auth · PR Review API |
+
+---
+
+## Project structure
+
+```
+backend/
+  main.py                          # FastAPI app — webhook receiver, background pipeline
+  app/
+    github_client.py               # GitHub App JWT auth, installation tokens, diff fetch
+    repo_manager.py                # Shallow clone at PR head SHA
+    agents/
+      ingestion/                   # Walk → chunk → embed → ChromaDB upsert
+      specialist/
+        graph.py                   # LangGraph fan-out: bug + security + pattern in parallel
+        bug/                       # Null refs, logic errors, resource leaks
+        security/                  # OWASP Top 10, hardcoded secrets, auth gaps
+        pattern/                   # Convention consistency vs ChromaDB codebase context
+      pr_writer/                   # Format + post inline GitHub review comments
+    models/
+      findings.py                  # Finding, AgentOutput, SpecialistResult (Pydantic)
+```
 
 ---
 
 ## Getting started
 
-### Backend
+### Prerequisites
+
+- Python 3.11+
+- A [GitHub App](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/about-creating-github-apps) with **Pull requests: Read & Write** and **Webhooks** permissions
+- OpenAI API key
+
+### Install
 
 ```bash
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install --index-url https://pypi.org/simple/ -r requirements.txt
 ```
+
+### Configure
 
 Create `backend/.env`:
 
@@ -142,31 +157,51 @@ GITHUB_APP_ID=your_app_id
 GITHUB_WEBHOOK_SECRET=your_webhook_secret
 GITHUB_PRIVATE_KEY_PATH=/path/to/private-key.pem
 OPENAI_API_KEY=sk-...
-DATABASE_URL=postgresql+asyncpg://user:password@localhost/prreview
 ```
 
+### Run
+
 ```bash
-alembic upgrade head
 uvicorn main:app --reload
 ```
 
-### Dashboard
-
-```bash
-cd frontend
-npm install && npm run dev
-```
-
-### Webhook tunnel (local development)
+### Receive webhooks locally
 
 ```bash
 npx smee-client --url https://smee.io/YOUR_CHANNEL --target http://localhost:8000/webhook
 ```
 
-Open or push to a PR on any repo with the GitHub App installed — the pipeline runs automatically.
+Open or push to a PR on any repo where the GitHub App is installed — the pipeline runs automatically in the background.
+
+### Test agents without a live PR
+
+```bash
+python test_specialist.py   # runs all three agents on sample diffs with deliberate bugs
+python test_ingestion.py    # tests the ChromaDB ingestion pipeline in isolation
+```
 
 ---
 
-## Further reading
+## Configuration
 
-Full system design, architectural decisions, and build plan: [`docs/code_review_system_v1.0.0.md`](docs/code_review_system_v1.0.0.md)
+| Variable | Default | Description |
+|---|---|---|
+| `CONFIDENCE_THRESHOLD` | `0.70` | Minimum confidence to post a finding to GitHub. Raise to reduce noise, lower to catch more. |
+
+Set in `main.py`. Findings below the threshold are silently dropped.
+
+---
+
+## Design decisions
+
+**Why three separate agents instead of one?**
+Each agent has a focused system prompt and a fixed set of categories it can report. A single agent asked to find everything tends to report fewer findings and conflate severity. Separation keeps each agent's context small and its output predictable.
+
+**Why LangGraph for the fan-out?**
+The three agents are fully independent — same input, no shared state. LangGraph's `StateGraph` with parallel edges from `__start__` gives clean fan-out/fan-in with async execution, so all three agents' API calls run concurrently rather than sequentially.
+
+**Why ChromaDB for the pattern agent?**
+The pattern agent's job is to compare new code against existing conventions. Without codebase context it would have nothing to compare against. ChromaDB lets it retrieve the most semantically similar functions from the same repo to use as a baseline.
+
+**Why post directly instead of a human approval step?**
+At the 0.70 confidence threshold, findings are specific enough to be worth surfacing without adding review friction. GitHub's own "Resolve conversation" and "Outdated" mechanisms handle dismissal and stale comment cleanup natively.

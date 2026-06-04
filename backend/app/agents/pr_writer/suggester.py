@@ -1,15 +1,15 @@
 import os
-from openai import OpenAI
+from openai import AsyncOpenAI
 from app.models.findings import Finding
 from app.agents.specialist.diff_utils import parse_diff_hunks
 
-_client: OpenAI | None = None
+_client: AsyncOpenAI | None = None
 
 
-def _get_client() -> OpenAI:
+def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        _client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     return _client
 
 
@@ -39,7 +39,7 @@ async def generate_suggestion(finding: Finding, diff: str) -> str | None:
     )
 
     try:
-        response = _get_client().chat.completions.create(
+        response = await _get_client().chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             temperature=0,

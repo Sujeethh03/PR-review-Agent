@@ -1,6 +1,6 @@
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
-from app.models.findings import AgentOutput, SpecialistResult
+from app.models.findings import AgentOutput
 
 
 class AgentState(TypedDict):
@@ -13,14 +13,6 @@ class AgentState(TypedDict):
     pattern_output: AgentOutput | None
 
 
-def collect_results(state: AgentState) -> dict:
-    return {
-        "bug_output":      state["bug_output"],
-        "security_output": state["security_output"],
-        "pattern_output":  state["pattern_output"],
-    }
-
-
 def build_graph(
     run_bug_agent,
     run_security_agent,
@@ -31,17 +23,13 @@ def build_graph(
     graph.add_node("bug",      run_bug_agent)
     graph.add_node("security", run_security_agent)
     graph.add_node("pattern",  run_pattern_agent)
-    graph.add_node("collect",  collect_results)
 
-    graph.set_entry_point("bug")
     graph.add_edge("__start__", "bug")
     graph.add_edge("__start__", "security")
     graph.add_edge("__start__", "pattern")
 
-    graph.add_edge("bug",      "collect")
-    graph.add_edge("security", "collect")
-    graph.add_edge("pattern",  "collect")
-
-    graph.add_edge("collect", END)
+    graph.add_edge("bug",      END)
+    graph.add_edge("security", END)
+    graph.add_edge("pattern",  END)
 
     return graph.compile()
