@@ -5,7 +5,10 @@
 # python
 __pycache__/
 *.pyc
+
+# macos
 .DS_Store
+**/.DS_Store
 
 # node
 node_modules/
