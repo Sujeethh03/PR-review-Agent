@@ -17,7 +17,8 @@ def _get_chroma():
     global _chroma_client
     if _chroma_client is None:
         import chromadb
-        _chroma_client = chromadb.PersistentClient(path="/tmp/chromadb")
+        path = os.getenv("CHROMADB_PATH", "/tmp/chromadb")
+        _chroma_client = chromadb.PersistentClient(path=path)
     return _chroma_client
 
 

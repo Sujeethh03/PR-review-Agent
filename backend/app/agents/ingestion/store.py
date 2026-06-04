@@ -1,4 +1,5 @@
 import hashlib
+import os
 import chromadb
 from app.models.chunks import Chunk
 
@@ -8,7 +9,8 @@ _chroma_client = None
 def _get_client() -> chromadb.Client:
     global _chroma_client
     if _chroma_client is None:
-        _chroma_client = chromadb.PersistentClient(path="/tmp/chromadb")
+        path = os.getenv("CHROMADB_PATH", "/tmp/chromadb")
+        _chroma_client = chromadb.PersistentClient(path=path)
     return _chroma_client
 
 

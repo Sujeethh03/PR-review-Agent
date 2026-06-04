@@ -8,10 +8,17 @@ GITHUB_API = "https://api.github.com"
 
 def _generate_jwt() -> str:
     app_id = os.getenv("GITHUB_APP_ID")
-    key_path = os.getenv("GITHUB_PRIVATE_KEY_PATH")
 
-    with open(key_path, "r") as f:
-        private_key = f.read()
+    # Production: base64-encoded key in GITHUB_PRIVATE_KEY env var
+    # Local: path to .pem file in GITHUB_PRIVATE_KEY_PATH env var
+    raw = os.getenv("GITHUB_PRIVATE_KEY")
+    if raw:
+        import base64
+        private_key = base64.b64decode(raw).decode("utf-8")
+    else:
+        key_path = os.getenv("GITHUB_PRIVATE_KEY_PATH")
+        with open(key_path, "r") as f:
+            private_key = f.read()
 
     now = int(time.time())
     payload = {
