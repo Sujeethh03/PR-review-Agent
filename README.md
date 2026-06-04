@@ -6,8 +6,17 @@ An AI pipeline that reviews GitHub pull requests the moment they are opened or u
 
 ## Demo
 
-<!-- Add a screenshot of an actual PR comment here -->
-> Open a PR on a repo with the GitHub App installed. Within seconds, inline comments appear on the flagged lines.
+The agent posts inline review comments directly on the flagged lines within seconds of a PR being opened.
+
+**Pipeline output** — 11 findings detected across two files, 10 posted after confidence filtering:
+
+![Pipeline logs showing findings detected and posted](docs/demo-pipeline-logs.png)
+
+**Inline comment on the PR diff** — bug finding with one-click fix suggestion:
+
+![Infinite loop detected with one-click fix suggestion](docs/demo-bug-infinite-loop.png)
+
+![Null reference — undefined class instantiation](docs/demo-bug-null-ref.png)
 
 ---
 
